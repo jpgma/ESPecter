@@ -4,6 +4,7 @@
 #include "arena.h"
 #include "engine_host.h"
 
+/* [main] Aloca a arena com [arena_init] e entra em [engine_host_run]. */
 int main(void)
 {
     void *block;

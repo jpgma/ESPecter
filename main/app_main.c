@@ -16,6 +16,7 @@
 
 static const char *TAG = "especter";
 
+/* [nvs_start] Sobe o NVS e apaga a partition se a versão não bater. */
 static void nvs_start(void)
 {
     esp_err_t err = nvs_flash_init();
@@ -27,6 +28,7 @@ static void nvs_start(void)
     ESP_ERROR_CHECK(err);
 }
 
+/* [ble_start] Liga o controller BLE e solta a memória do CLASSIC_BT. */
 static void ble_start(void)
 {
     esp_bt_controller_config_t controller_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
@@ -44,6 +46,7 @@ static void ble_start(void)
     ESP_LOGI(TAG, "ble controller up");
 }
 
+/* [app_main] Liga o BAT_EN e então [nvs_start], [ble_start], [arena_init] e [engine_host_run]. */
 void app_main(void)
 {
     void *block;

@@ -29,6 +29,7 @@ constexpr int k_pclk_hz = 80 * 1000 * 1000;
 
 const char *k_tag = "st7789";
 
+/* [spi_done_cb] Acorda a task quando o band SPI termina. */
 bool spi_done_cb(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
 {
     auto *done = static_cast<SemaphoreHandle_t>(user_ctx);
@@ -44,16 +45,19 @@ bool spi_done_cb(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data
 
 namespace especter {
 
+/* [st7789_drawer] Deixa o panel fechado. [st7789_drawer::init] aloca o framebuffer. */
 st7789_drawer::st7789_drawer()
     : pixels(nullptr), band(nullptr), palette_count(1), ready(0), panel(nullptr), panel_io(nullptr), spi_done(nullptr)
 {
     palette[0] = 0;
 }
 
+/* [st7789_drawer::~st7789_drawer] Não libera o panel. O LCD fica ligado até o reset. */
 st7789_drawer::~st7789_drawer()
 {
 }
 
+/* [st7789_drawer::index_for] Devolve o índice da cor na palette, criando entrada se couber. */
 uint8_t st7789_drawer::index_for(uint16_t color)
 {
     int i;
@@ -71,6 +75,7 @@ uint8_t st7789_drawer::index_for(uint16_t color)
     return 0;
 }
 
+/* [st7789_drawer::init] Sobe o SPI3, o panel e o backlight. */
 void st7789_drawer::init()
 {
     spi_bus_config_t buscfg = {};
@@ -138,6 +143,7 @@ void st7789_drawer::init()
     ready = 1;
 }
 
+/* [st7789_drawer::clearBuffer] Zera o framebuffer e a palette. */
 void st7789_drawer::clearBuffer()
 {
     if (pixels == nullptr) {
@@ -148,6 +154,7 @@ void st7789_drawer::clearBuffer()
     palette[0] = 0;
 }
 
+/* [st7789_drawer::drawPixel] Grava um índice da palette no pixel. */
 void st7789_drawer::drawPixel(int x, int y, uint16_t color)
 {
     if (pixels == nullptr || x < 0 || y < 0 || x >= logicalWidth || y >= logicalHeight) {
@@ -156,6 +163,7 @@ void st7789_drawer::drawPixel(int x, int y, uint16_t color)
     pixels[static_cast<size_t>(y * logicalWidth + x)] = index_for(color);
 }
 
+/* [st7789_drawer::drawFilledRectangle] Preenche um rectangle com um índice da palette. */
 void st7789_drawer::drawFilledRectangle(int x, int y, int w, int h, uint16_t color)
 {
     int x0;
@@ -188,6 +196,7 @@ void st7789_drawer::drawFilledRectangle(int x, int y, int w, int h, uint16_t col
     }
 }
 
+/* [st7789_drawer::sendBuffer] Converte bands 8bpp em RGB565 e envia por DMA. */
 void st7789_drawer::sendBuffer()
 {
     auto *lcd = static_cast<esp_lcd_panel_handle_t>(panel);

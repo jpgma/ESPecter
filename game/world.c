@@ -11,6 +11,7 @@ static int *row_w;
 static int *row_h;
 static int row_count;
 
+/* [clamp_pos] Limita a posição para o Rect caber na View. */
 static int clamp_pos(int value)
 {
     if (value < 0) {
@@ -22,6 +23,7 @@ static int clamp_pos(int value)
     return value;
 }
 
+/* [world_init] Monta o Rect na slice de [arena_world]. Devolve 0 se [arena_ready] servir. */
 int world_init(void)
 {
     arena_slice slice;
@@ -49,6 +51,7 @@ int world_init(void)
     return 0;
 }
 
+/* [world_tick] Move o Rect com as actions de [actions_capture]. */
 void world_tick(const actions *input)
 {
     int x;
@@ -71,6 +74,7 @@ void world_tick(const actions *input)
     row_y[0] = clamp_pos(y);
 }
 
+/* [world_rect] Escreve posição e tamanho do Rect. */
 void world_rect(int *x, int *y, int *w, int *h)
 {
     if (row_count < 1) {

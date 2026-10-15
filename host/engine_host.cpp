@@ -29,6 +29,7 @@ int g_pc_fps = -1;
 unsigned long g_pc_ms;
 int g_pc_frames;
 
+/* [pc_window_bind] Põe o título ESPecter na window SDL, uma vez. */
 void pc_window_bind(void)
 {
     SDL_Window *window;
@@ -46,6 +47,7 @@ void pc_window_bind(void)
     }
 }
 
+/* [pc_note_frame] Acumula o frame e atualiza o FPS a cada meio segundo. */
 void pc_note_frame(unsigned long delta_time)
 {
     pc_window_bind();
@@ -65,6 +67,7 @@ void pc_note_frame(unsigned long delta_time)
 
 class rect_scene : public pixelroot32::core::Scene {
 public:
+    /* [rect_scene::update] Aplica [actions_capture] e avança com [world_tick]. */
     void update(unsigned long delta_time) override
     {
         actions input;
@@ -78,6 +81,7 @@ public:
 #endif
     }
 
+    /* [rect_scene::draw] Pinta o ground e o Rect. O FPS vem de [pc_note_frame]. */
     void draw(pixelroot32::graphics::Renderer &renderer) override
     {
         int x;
@@ -101,6 +105,7 @@ public:
 
 rect_scene g_scene;
 
+/* [log_memory] Imprime [arena_capacity] e [arena_offset] e, no device, o heap livre. */
 void log_memory(void)
 {
 #ifdef PLATFORM_NATIVE
@@ -120,6 +125,7 @@ void log_memory(void)
 
 } // namespace
 
+/* [engine_host_run] Sobe a Scene depois de [world_init] e entra no laço do Engine. */
 extern "C" void engine_host_run(void)
 {
     if (world_init() != 0) {

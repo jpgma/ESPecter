@@ -18,15 +18,21 @@ typedef struct arena_slice {
     size_t size;
 } arena_slice;
 
-/* Takes the block for the process lifetime. Never returned. Returns 0 on success. */
+/* [arena_init] Fixa o block até o fim do processo. Devolve 0 se couber. */
 int arena_init(void *block, size_t capacity);
 
+/* [arena_ready] Devolve 1 se a arena já foi inicializada. */
 int arena_ready(void);
+/* [arena_capacity] Devolve o tamanho total do block. */
 size_t arena_capacity(void);
+/* [arena_offset] Devolve quantos bytes já foram recortados. */
 size_t arena_offset(void);
 
+/* [arena_world] Devolve a slice fixa do world. */
 arena_slice arena_world(void);
+/* [arena_level] Devolve a slice fixa do level. */
 arena_slice arena_level(void);
+/* [arena_scratch] Devolve a slice fixa de scratch. */
 arena_slice arena_scratch(void);
 
 #ifdef __cplusplus

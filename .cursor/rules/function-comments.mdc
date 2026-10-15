@@ -1,0 +1,28 @@
+---
+description: Comentário sucinto em pt-BR acima de cada função, com id estável
+alwaysApply: true
+---
+
+# Comentários de função
+
+Cada função que escrevemos leva um comentário sucinto em português do Brasil na linha de cima. Isso vale para funções estáticas, métodos, construtores, destrutores e funções inline.
+
+Uma linha, em `/* */`. O comentário diz o efeito. Se o retorno não for óbvio, diz o que volta. Sem bloco Doxygen.
+
+A frase fica em português. Conceito ou construct com nome em inglês permanece em inglês, como View, slice, Rect e actions.
+
+O id estável é o símbolo entre colchetes, no começo. Função livre: `[world_init]`. Método: `[st7789_drawer::init]`. Declaração e definição usam o mesmo id. O símbolo continua válido quando o arquivo ganha ou perde linhas.
+
+Se a frase depende do contrato de outra função, cita o id dela no texto.
+
+Ao mudar uma função, atualize o comentário do id dela. Busque o token exato `\[id\]` (o colchete fecha logo após o símbolo) e ajuste cada comentário cuja frase deixou de valer.
+
+`third_party/` é dependência. Não comentar.
+
+```c
+/* [clamp_pos] Limita a posição para o Rect caber na View. */
+static int clamp_pos(int value)
+
+/* [world_init] Monta o Rect na slice de [arena_world]. Devolve 0 se [arena_ready] servir. */
+int world_init(void);
+```

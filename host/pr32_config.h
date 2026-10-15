@@ -1,6 +1,6 @@
 #pragma once
 
-/* Injected before every translation unit. Keeps PixelRoot32 on the small set. */
+/* Injetado antes de cada translation unit. Mantém o PixelRoot32 no conjunto mínimo. */
 
 #define PIXELROOT32_ENABLE_AUDIO 0
 #define PIXELROOT32_ENABLE_PHYSICS 0
@@ -20,6 +20,7 @@
 
 #if defined(_MSC_VER)
 #define IRAM_ATTR
+/* [__builtin_popcount] Conta os bits ligados. Supre a função ausente no MSVC. */
 static inline int __builtin_popcount(unsigned int value)
 {
     int count = 0;

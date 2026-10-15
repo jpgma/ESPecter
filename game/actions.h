@@ -14,6 +14,7 @@ typedef struct actions {
     int cancel;
 } actions;
 
+/* [actions_capture] Preenche as actions deste frame. */
 void actions_capture(actions *out);
 
 #ifdef __cplusplus

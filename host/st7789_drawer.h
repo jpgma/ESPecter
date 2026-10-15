@@ -6,16 +6,24 @@ namespace especter {
 
 class st7789_drawer : public pixelroot32::graphics::BaseDrawSurface {
 public:
+    /* [st7789_drawer] Deixa o panel fechado. [st7789_drawer::init] aloca o framebuffer. */
     st7789_drawer();
+    /* [st7789_drawer::~st7789_drawer] Não libera o panel. O LCD fica ligado até o reset. */
     ~st7789_drawer() override;
 
+    /* [st7789_drawer::init] Sobe o SPI3, o panel e o backlight. */
     void init() override;
+    /* [st7789_drawer::clearBuffer] Zera o framebuffer e a palette. */
     void clearBuffer() override;
+    /* [st7789_drawer::sendBuffer] Converte bands 8bpp em RGB565 e envia por DMA. */
     void sendBuffer() override;
+    /* [st7789_drawer::drawPixel] Grava um índice da palette no pixel. */
     void drawPixel(int x, int y, uint16_t color) override;
+    /* [st7789_drawer::drawFilledRectangle] Preenche um rectangle com um índice da palette. */
     void drawFilledRectangle(int x, int y, int w, int h, uint16_t color) override;
 
 private:
+    /* [st7789_drawer::index_for] Devolve o índice da cor na palette, criando entrada se couber. */
     uint8_t index_for(uint16_t color);
 
     uint8_t *pixels;

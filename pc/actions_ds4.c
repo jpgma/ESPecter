@@ -8,6 +8,7 @@
 static SDL_GameController *pad;
 static int started;
 
+/* [pad_open] Abre o primeiro pad SDL que estiver ligado. */
 static void pad_open(void)
 {
     int i;
@@ -35,6 +36,7 @@ static void pad_open(void)
     }
 }
 
+/* [actions_capture] Lê o axis e os botões do pad que [pad_open] achou. */
 void actions_capture(actions *out)
 {
     int axis;

@@ -38,6 +38,7 @@
 typedef uint8_t byte;
 typedef bool boolean;
 
+/* [especter_pin_mode] Configura o GPIO como INPUT, OUTPUT ou INPUT_PULLUP. */
 static inline void especter_pin_mode(int pin, int mode)
 {
     gpio_config_t cfg = {};
@@ -53,6 +54,7 @@ static inline void especter_pin_mode(int pin, int mode)
     gpio_config(&cfg);
 }
 
+/* [especter_digital_write] Escreve HIGH ou LOW no GPIO. */
 static inline void especter_digital_write(int pin, int value)
 {
     if (pin < 0 || pin > 48) {
@@ -61,6 +63,7 @@ static inline void especter_digital_write(int pin, int value)
     gpio_set_level(static_cast<gpio_num_t>(pin), value ? 1 : 0);
 }
 
+/* [especter_digital_read] Lê o GPIO. pin inválido devolve HIGH. */
 static inline int especter_digital_read(int pin)
 {
     if (pin < 0 || pin > 48) {
@@ -74,21 +77,25 @@ static inline int especter_digital_read(int pin)
 #define digitalRead(pin) especter_digital_read((pin))
 
 struct HardwareSerial {
+    /* [HardwareSerial::begin] Ignora o baud. O log já sai pelo USB Serial/JTAG. */
     void begin(unsigned long baud)
     {
         (void)baud;
     }
 
+    /* [HardwareSerial::print] Escreve o texto no stdout. */
     size_t print(const char *text)
     {
         return text == nullptr ? 0u : static_cast<size_t>(printf("%s", text));
     }
 
+    /* [HardwareSerial::println] Escreve o texto e uma quebra de linha. */
     size_t println(const char *text)
     {
         return text == nullptr ? static_cast<size_t>(printf("\n")) : static_cast<size_t>(printf("%s\n", text));
     }
 
+    /* [HardwareSerial::printf] Escreve no stdout com o formato de printf. */
     int printf(const char *fmt, ...)
     {
         va_list args;
