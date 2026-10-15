@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #include "driver/gpio.h"
+#include "esp_heap_caps.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -29,11 +30,35 @@
 #define IRAM_ATTR
 #endif
 
-#define yield() taskYIELD()
-#define delay(ms) vTaskDelay(pdMS_TO_TICKS(ms))
-#define delayMicroseconds(us) esp_rom_delay_us(us)
-#define millis() ((unsigned long)(esp_timer_get_time() / 1000ULL))
-#define micros() ((unsigned long)esp_timer_get_time())
+/* [yield] Cede a CPU para o FreeRTOS. */
+static inline void yield(void)
+{
+    taskYIELD();
+}
+
+/* [delay] Bloqueia a task por ms milissegundos. */
+static inline void delay(unsigned long ms)
+{
+    vTaskDelay(pdMS_TO_TICKS(ms));
+}
+
+/* [delayMicroseconds] Espera us microssegundos. */
+static inline void delayMicroseconds(unsigned int us)
+{
+    esp_rom_delay_us(us);
+}
+
+/* [millis] Devolve os milissegundos desde o boot. */
+static inline unsigned long millis(void)
+{
+    return (unsigned long)(esp_timer_get_time() / 1000ULL);
+}
+
+/* [micros] Devolve os microssegundos desde o boot. */
+static inline unsigned long micros(void)
+{
+    return (unsigned long)esp_timer_get_time();
+}
 
 typedef uint8_t byte;
 typedef bool boolean;
@@ -72,9 +97,23 @@ static inline int especter_digital_read(int pin)
     return gpio_get_level(static_cast<gpio_num_t>(pin));
 }
 
-#define pinMode(pin, mode) especter_pin_mode((pin), (mode))
-#define digitalWrite(pin, value) especter_digital_write((pin), (value))
-#define digitalRead(pin) especter_digital_read((pin))
+/* [pinMode] Configura o GPIO. Delega a [especter_pin_mode]. */
+static inline void pinMode(int pin, int mode)
+{
+    especter_pin_mode(pin, mode);
+}
+
+/* [digitalWrite] Escreve HIGH ou LOW no GPIO. Delega a [especter_digital_write]. */
+static inline void digitalWrite(int pin, int value)
+{
+    especter_digital_write(pin, value);
+}
+
+/* [digitalRead] Lê o GPIO. Delega a [especter_digital_read]. */
+static inline int digitalRead(int pin)
+{
+    return especter_digital_read(pin);
+}
 
 struct HardwareSerial {
     /* [HardwareSerial::begin] Ignora o baud. O log já sai pelo USB Serial/JTAG. */
@@ -109,3 +148,19 @@ struct HardwareSerial {
 };
 
 inline HardwareSerial Serial;
+
+struct EspClass {
+    /* [EspClass::getFreeHeap] Devolve o heap 8-bit livre, em bytes. */
+    uint32_t getFreeHeap()
+    {
+        return static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_8BIT));
+    }
+
+    /* [EspClass::getHeapSize] Devolve o tamanho total do heap 8-bit, em bytes. */
+    uint32_t getHeapSize()
+    {
+        return static_cast<uint32_t>(heap_caps_get_total_size(MALLOC_CAP_8BIT));
+    }
+};
+
+inline EspClass ESP;

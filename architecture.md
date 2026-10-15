@@ -39,6 +39,8 @@ PixelRoot32 1.12.0 has no ESP-IDF component. Its device drawer is TFT_eSPI and a
 
 The device build passes `DisplayType::CUSTOM` and [host/st7789_drawer.cpp](host/st7789_drawer.cpp). That drawer uses `esp_lcd` on SPI3, the same pins and mode as the board hello. [compat/Arduino.h](compat/Arduino.h) and [compat/SPI.h](compat/SPI.h) satisfy the engine's non-native includes. `ARDUINO_ARCH_ESP32` is not defined. The engine tree is not patched.
 
+On this target [graphics/DisplayConfig.h](third_party/pixelroot32/include/graphics/DisplayConfig.h) names `DrawSurface` and [core/Engine.cpp](third_party/pixelroot32/src/core/Engine.cpp) aliases `pixelroot32::drivers` without opening that namespace. [host/pr32_config.h](host/pr32_config.h) is force-included and, for device C++ only, pulls in `graphics/DrawSurface.h` and opens `pixelroot32::drivers`. The same engine file calls `ESP.getFreeHeap` after [platforms/EngineConfig.h](third_party/pixelroot32/include/platforms/EngineConfig.h) includes `<Arduino.h>`. The shim's `ESP` reports the 8-bit heap. `millis`, `delay`, and the GPIO helpers are functions, so a method named `millis` in the engine still declares. The PC build defines `PLATFORM_NATIVE` and does not take this path.
+
 Compile flags: C++17, no exceptions, no RTTI, `PIXELROOT32_NO_TFT_ESPI`, `PIXELROOT32_NO_I2S_AUDIO`, and `PIXELROOT32_ENABLE_AUDIO`, `PHYSICS`, `PARTICLES`, `UI_SYSTEM`, `TOUCH`, `SCENE_TRANSITIONS`, `CAMERA_EFFECTS`, and `STATIC_TILEMAP_FB_CACHE` all 0.
 
 The PC build defines `PLATFORM_NATIVE` and uses the engine's SDL2 drawer. It does not compile the ST7789 drawer or the Arduino shim. The window title is ESPecter. The host draws the measured frame rate in the corner of that window. The device scene does not.

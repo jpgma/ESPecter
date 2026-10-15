@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
 if not defined IDF_PATH set "IDF_PATH=%USERPROFILE%\esp\esp-idf"
@@ -33,27 +33,101 @@ echo   flash.bat
 echo   flash.bat --port COM5
 echo.
 echo ESP-IDF is %%USERPROFILE%%\esp\esp-idf, or IDF_PATH if that is already set.
+echo Missing PixelRoot32 trees are fetched with git submodule update --init.
+echo A build directory without CMakeCache.txt is deleted before set-target.
+echo Each step prints how long it took.
 exit /b 0
 
 :parsed
+call :tick START
+
+call :tick T
 if not defined PORT (
     for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "$p = @(Get-CimInstance Win32_PnPEntity | Where-Object { $_.DeviceID -match 'VID_303A' -and $_.Name -match '\(COM\d+\)' }); if ($p.Count -eq 0) { exit 2 }; if ($p.Count -gt 1) { $p | ForEach-Object { [Console]::Error.WriteLine($_.Name) }; exit 3 }; if ($p[0].Name -match '\((COM\d+)\)') { $Matches[1] }"`) do set "PORT=%%p"
-    if not defined PORT (
-        echo No Espressif USB serial port found. Plug in the board, or pass --port COMx.
-        exit /b 1
-    )
+)
+set "RC=0"
+if not defined PORT set "RC=1"
+call :tock "!T!" "port"
+if !RC! neq 0 (
+    echo No Espressif USB serial port found. Plug in the board, or pass --port COMx.
+    exit /b 1
 )
 
 echo Using ESP-IDF: %IDF_PATH%
-echo Flashing on %PORT%
+echo Flashing on !PORT!
+
+call :tick T
+set "NEED_SUBMODULES=0"
+if not exist "third_party\pixelroot32\include\core\Engine.h" set "NEED_SUBMODULES=1"
+if not exist "third_party\pixelroot32-apu\include\pixelroot32\apu\ApuCore.h" set "NEED_SUBMODULES=1"
+set "RC=0"
+if "!NEED_SUBMODULES!"=="1" (
+    echo PixelRoot32 is missing. Running git submodule update --init
+    git submodule update --init
+    set "RC=!ERRORLEVEL!"
+)
+if !RC! equ 0 if not exist "third_party\pixelroot32\include\core\Engine.h" set "RC=1"
+if !RC! equ 0 if not exist "third_party\pixelroot32-apu\include\pixelroot32\apu\ApuCore.h" set "RC=1"
+call :tock "!T!" "submodules"
+if !RC! neq 0 (
+    echo git submodule update --init failed
+    exit /b !RC!
+)
+
+call :tick T
+set "RC=0"
+if exist build if not exist "build\CMakeCache.txt" (
+    echo Removing incomplete build directory
+    rmdir /s /q build
+    if exist build set "RC=1"
+)
+call :tock "!T!" "build directory"
+if !RC! neq 0 (
+    echo Could not remove the build directory.
+    exit /b !RC!
+)
+
+call :tick T
 call "%IDF_PATH%\export.bat"
-if errorlevel 1 (
+set "RC=!ERRORLEVEL!"
+call :tock "!T!" "esp-idf"
+if !RC! neq 0 (
     echo export.bat failed
-    exit /b 1
+    exit /b !RC!
 )
+
 if not exist sdkconfig (
+    call :tick T
     idf.py set-target esp32s3
-    if errorlevel 1 exit /b 1
+    set "RC=!ERRORLEVEL!"
+    call :tock "!T!" "set-target"
+    if !RC! neq 0 exit /b !RC!
 )
-idf.py -p %PORT% build flash
-exit /b %ERRORLEVEL%
+
+call :tick T
+idf.py -p !PORT! build flash
+set "RC=!ERRORLEVEL!"
+call :tock "!T!" "build flash"
+call :tock "!START!" "total"
+exit /b !RC!
+
+:tick
+set "NOW=!TIME: =0!"
+set "NOW=!NOW:,=.!"
+for /f "tokens=1-4 delims=:." %%a in ("!NOW!") do set /a "%~1=((1%%a-100)*360000)+((1%%b-100)*6000)+((1%%c-100)*100)+(1%%d-100)"
+exit /b 0
+
+:tock
+set "NOW=!TIME: =0!"
+set "NOW=!NOW:,=.!"
+for /f "tokens=1-4 delims=:." %%a in ("!NOW!") do set /a "END=((1%%a-100)*360000)+((1%%b-100)*6000)+((1%%c-100)*100)+(1%%d-100)"
+set /a "DELTA=END-%~1"
+if !DELTA! lss 0 set /a "DELTA+=8640000"
+set /a "SEC=DELTA/100"
+set /a "FRAC=DELTA%%100"
+if !FRAC! lss 10 (
+    echo [!SEC!.0!FRAC!s] %~2
+) else (
+    echo [!SEC!.!FRAC!s] %~2
+)
+exit /b 0

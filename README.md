@@ -10,6 +10,8 @@ A small 2D platformer for the Waveshare ESP32-S3-Touch-LCD-1.54. Decisions live 
 
 ## Checkout
 
+`pc.bat` needs the submodules on disk. `flash.bat` runs the same init when the engine headers are missing.
+
 ```text
 git submodule update --init
 ```
@@ -35,4 +37,4 @@ flash.bat --port COM5
 monitor.bat
 ```
 
-`flash.bat` builds and flashes. The panel shows the same rectangle, still, with the backlight on. The log shows the BLE controller, the arena capacity and offset, free internal heap, the largest free internal block, and free PSRAM. No gamepad is required. The device does not init I2C, Wi-Fi, the codec, or the IMU.
+`flash.bat` builds and flashes. If the PixelRoot32 headers are missing it runs `git submodule update --init`. If `build` exists without `CMakeCache.txt`, it deletes that directory so `set-target` can run. `flash.bat`, `pc.bat`, and `monitor.bat` print how long each step took. The panel shows the same rectangle, still, with the backlight on. The log shows the BLE controller, the arena capacity and offset, free internal heap, the largest free internal block, and free PSRAM. No gamepad is required. The device does not init I2C, Wi-Fi, the codec, or the IMU.

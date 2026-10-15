@@ -6,3 +6,4 @@ managed_components/
 dependencies.lock
 .cache/
 *.pyc
+.vscode/settings.json

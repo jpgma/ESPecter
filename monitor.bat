@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
 if not defined IDF_PATH set "IDF_PATH=%USERPROFILE%\esp\esp-idf"
@@ -9,10 +9,40 @@ if not exist "%IDF_PATH%\export.bat" (
     exit /b 1
 )
 
+call :tick START
+call :tick T
 call "%IDF_PATH%\export.bat"
-if errorlevel 1 (
+set "RC=!ERRORLEVEL!"
+call :tock "!T!" "esp-idf"
+if !RC! neq 0 (
     echo export.bat failed
-    exit /b 1
+    exit /b !RC!
 )
+
+call :tick T
 idf.py monitor
-exit /b %ERRORLEVEL%
+set "RC=!ERRORLEVEL!"
+call :tock "!T!" "monitor"
+call :tock "!START!" "total"
+exit /b !RC!
+
+:tick
+set "NOW=!TIME: =0!"
+set "NOW=!NOW:,=.!"
+for /f "tokens=1-4 delims=:." %%a in ("!NOW!") do set /a "%~1=((1%%a-100)*360000)+((1%%b-100)*6000)+((1%%c-100)*100)+(1%%d-100)"
+exit /b 0
+
+:tock
+set "NOW=!TIME: =0!"
+set "NOW=!NOW:,=.!"
+for /f "tokens=1-4 delims=:." %%a in ("!NOW!") do set /a "END=((1%%a-100)*360000)+((1%%b-100)*6000)+((1%%c-100)*100)+(1%%d-100)"
+set /a "DELTA=END-%~1"
+if !DELTA! lss 0 set /a "DELTA+=8640000"
+set /a "SEC=DELTA/100"
+set /a "FRAC=DELTA%%100"
+if !FRAC! lss 10 (
+    echo [!SEC!.0!FRAC!s] %~2
+) else (
+    echo [!SEC!.!FRAC!s] %~2
+)
+exit /b 0

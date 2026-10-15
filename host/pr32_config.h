@@ -31,3 +31,12 @@ static inline int __builtin_popcount(unsigned int value)
     return count;
 }
 #endif
+
+#if defined(__cplusplus) && !defined(PLATFORM_NATIVE)
+#include "graphics/DrawSurface.h"
+
+namespace pixelroot32 {
+namespace drivers {
+}
+}
+#endif
