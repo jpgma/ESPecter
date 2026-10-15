@@ -51,11 +51,12 @@ int world_init(void)
     return 0;
 }
 
-/* [world_tick] Move o Rect com as actions de [actions_capture]. */
+/* [world_tick] Desloca o Rect no plano com as actions de [actions_capture]. */
 void world_tick(const actions *input)
 {
     int x;
     int y;
+    int up;
 
     if (row_count < 1 || input == 0) {
         return;
@@ -67,8 +68,11 @@ void world_tick(const actions *input)
     } else if (input->move_right && !input->move_left) {
         x += WORLD_STEP;
     }
-    if (input->jump) {
+    up = input->move_up || input->jump;
+    if (up && !input->move_down) {
         y -= WORLD_STEP;
+    } else if (input->move_down && !up) {
+        y += WORLD_STEP;
     }
     row_x[0] = clamp_pos(x);
     row_y[0] = clamp_pos(y);

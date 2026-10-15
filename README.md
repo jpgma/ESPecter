@@ -25,7 +25,7 @@ Pins:
 pc.bat
 ```
 
-Opens a window titled ESPecter with one 16×16 rectangle and the current frame rate. DS4Windows, in its default Xbox 360 profile, drives it: left stick or d-pad slides, the south button raises it. With no controller the rectangle stays centered. Close the window to exit. This build does not open a Bluetooth radio.
+Opens a window titled ESPecter with one 16×16 rectangle and the current frame rate. The keyboard mirrors the Q36 face: WASD is the d-pad, JIKL is X, Y, A, and B, Q and E are L and L2, U and O are R2 and R, and F, G, and H are View, Home, and Menu. The rectangle steps with the d-pad and rises on the south button. DS4Windows, in its default Xbox 360 profile, fills the same snapshot: left stick or d-pad slides, the south button raises it. With neither, the rectangle stays centered. Close the window to exit. This build does not open a Bluetooth radio.
 
 ## Board
 

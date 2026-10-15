@@ -87,16 +87,27 @@ Later music and effects are short PCM clips in flash, played through the ES8311.
 
 The Q36XDV is not on the board. The chip is BLE only, so Classic HID is not an option. `sdkconfig.defaults` enables Bluedroid, BLE-only. `app_main` raises `BAT_EN`, starts the controller and the host, then the arena, then the scene. It does not connect to the first HID it sees. The pad's switch X name is `Xbox Wireless Controller`. The report map is still unread, so the device writes a clear action snapshot and the rectangle stays still.
 
-The PC build does not open a Bluetooth radio and does not link Bluedroid. DS4Windows owns the radio and, in its default profile, exposes an Xbox 360 pad. [pc/actions_ds4.c](pc/actions_ds4.c) is compiled only into the PC target. It reads the first SDL game controller. A virtual DualShock profile is not the one this sim supports.
+The PC build does not open a Bluetooth radio and does not link Bluedroid. DS4Windows owns the radio and, in its default profile, exposes an Xbox 360 pad. [pc/actions_ds4.c](pc/actions_ds4.c) is compiled only into the PC target. It reads the keyboard and the first SDL game controller, and ORs them. A virtual DualShock profile is not the one this sim supports. The device links [game/actions.c](game/actions.c), which clears the snapshot and does not read a keyboard.
 
-[game/actions.h](game/actions.h) is the shared snapshot: `move_left`, `move_right`, `jump`, `pause`, `confirm`, `cancel`. The host calls `actions_capture` once per update. The device links [game/actions.c](game/actions.c), which clears the snapshot.
+[game/actions.h](game/actions.h) is the shared snapshot. The host calls `actions_capture` once per update. Held play buttons are `dpad_up`, `dpad_down`, `dpad_left`, `dpad_right`, `face_y`, `face_x`, `face_a`, `face_b`, `shoulder_l`, `trigger_l2`, `trigger_r2`, `shoulder_r`, `select`, `home`, and `start`. The reader then derives `move_up`, `move_down`, `move_left`, `move_right`, `jump`, `pause`, `confirm`, and `cancel`. The left stick past a dead zone also sets `move_left` / `move_right`. The Q36 has no stick; that axis is only the Xbox stand-in.
 
-Sim map, for the Xbox layout DS4Windows emits, not a claim about Q36XDV report bytes:
+Keyboard placement follows the Q36 face. The Type-C port, LED, reset hole, X/D/V slide, and Pair are not play buttons, so they have no key.
 
-- D-pad or left stick past a dead zone: `move_left` / `move_right`. The rectangle steps horizontally.
-- South button: `jump` and `confirm`. The rectangle steps up while held.
-- Start: `pause`. Back/B: `cancel`.
-- No controller: the snapshot stays clear and the rectangle stays centered.
+| Q36 | Key | Snapshot |
+| --- | --- | --- |
+| D-pad up, left, down, right | W A S D | `dpad_up` `dpad_left` `dpad_down` `dpad_right` |
+| Y, X, A, B | I J K L | `face_y` `face_x` `face_a` `face_b` |
+| L, L2 | Q E | `shoulder_l` `trigger_l2` |
+| R2, R | U O | `trigger_r2` `shoulder_r` |
+| View (−), Home, Menu (+) | F G H | `select` `home` `start` |
+
+Derived, for either source:
+
+- D-pad: `move_up` / `move_down` / `move_left` / `move_right`. The rectangle steps on that axis. Opposite directions cancel.
+- Left stick past a dead zone: `move_left` / `move_right` as well.
+- South button (`face_a`): `jump` and `confirm`. The rectangle steps up while held. D-pad down cancels that step.
+- Menu (`start`): `pause`. B (`face_b`): `cancel`.
+- No key and no controller: the snapshot stays clear and the rectangle stays centered.
 
 ## Physics
 
@@ -154,6 +165,7 @@ Boot log, after the engine buffer exists: free internal heap, largest free inter
 | 2026-10-15 | Logical and physical resolution 240×240, no scale |
 | 2026-10-15 | Physics is a later kinematic step from Metanet tutorial A. Engine physics stays compiled out. The school demo is a mechanic reference only |
 | 2026-10-15 | Bluedroid BLE-only is on from the first device boot. Wi-Fi is off. HID report map is still open. PC reads a DS4Windows Xbox pad and does not open a radio |
+| 2026-10-15 | PC keyboard ORs into the same snapshot as the Xbox pad. Keys follow the Q36 face. Pair, the mode slide, the LED, the reset hole, and Type-C are not play buttons. The device snapshot stays clear |
 | 2026-10-15 | Fixed timestep length and feel constants stay open until something actually jumps |
 | 2026-10-15 | One 64 KB PSRAM arena, carved once, never freed. BLE's byte cost stays unmeasured until the boot log |
 | 2026-10-15 | Nidhogg 1 art: 4-color screens, 1bpp or 2bpp, no copied assets. NES audio voices stay off. Later sound is PCM on the ES8311 |

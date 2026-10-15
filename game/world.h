@@ -12,7 +12,7 @@ extern "C" {
 
 /* [world_init] Monta o Rect na slice de [arena_world]. Devolve 0 se [arena_ready] servir. */
 int world_init(void);
-/* [world_tick] Move o Rect com as actions de [actions_capture]. */
+/* [world_tick] Desloca o Rect no plano com as actions de [actions_capture]. */
 void world_tick(const actions *input);
 /* [world_rect] Escreve posição e tamanho do Rect. */
 void world_rect(int *x, int *y, int *w, int *h);
