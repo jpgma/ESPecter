@@ -1,0 +1,29 @@
+---
+description: C and host naming for ESPecter game code
+globs: game/**,main/**,host/**,compat/**
+alwaysApply: false
+---
+
+# C style
+
+`snake_case` for types, functions, files, and fields. Game translation units are C.
+
+```c
+/* good */
+typedef struct arena_slice {
+    uint8_t *data;
+    size_t size;
+} arena_slice;
+
+void world_init(void);
+```
+
+```c
+/* bad */
+typedef struct WorldSlice { uint8_t *Data; } WorldSlice;
+void WorldInit(void);
+```
+
+SoA is parallel arrays, not an array of structs that grows with `malloc`.
+
+C++ is limited to `host/engine_host.cpp` and `host/st7789_drawer.cpp`. Those files may subclass PixelRoot32 types. They still use `snake_case` for new names.

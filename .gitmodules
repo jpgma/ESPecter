@@ -1,0 +1,6 @@
+[submodule "pixelroot32"]
+	path = third_party/pixelroot32
+	url = https://github.com/PixelRoot32-Game-Engine/PixelRoot32-Game-Engine.git
+[submodule "pixelroot32-apu"]
+	path = third_party/pixelroot32-apu
+	url = https://github.com/gperez88/PixelRoot32-APU.git

@@ -1,0 +1,16 @@
+---
+description: ESPecter architecture decisions and when to update architecture.md
+alwaysApply: true
+---
+
+# Architecture
+
+Follow [architecture.md](architecture.md). It is the decision record. [initial_idea.md](initial_idea.md) is the proposal.
+
+When a decision changes, edit architecture.md in the same change. That includes boundaries, resolution, hardware that is in or out, engine flags, folder layout, a memory-slice size, or a new resident in the memory table.
+
+- Game code is C. SoA, free functions, fixed capacity. No classes, templates, exceptions, RTTI, or STL containers in `game/`.
+- C++ only in the engine host and the ST7789 drawer, because PixelRoot32's API is C++.
+- `game/` does not include PixelRoot32 or ESP-IDF, and does not call `malloc` or `free`.
+- Do not patch `third_party/pixelroot32`. Board pins and the panel stay in the drawer.
+- Bluetooth LE stays on in the device build. Wi-Fi stays off. The PC pad reader stays out of the device sources.
