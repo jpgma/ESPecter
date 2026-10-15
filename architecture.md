@@ -48,13 +48,14 @@ The PC build defines `PLATFORM_NATIVE` and uses the engine's SDL2 drawer. It doe
 ## Hardware consequences
 
 - Panel: write-only ST7789, 240×240 visible, RGB565, SPI mode 3 at 80 MHz. GPIO21 CS, GPIO38 CLK, GPIO39 MOSI, GPIO45 DC, GPIO40 RST, GPIO46 backlight. GPIO45 and GPIO46 are strapping pins. They are configured only after boot. No MISO. No TE. Tearing is a hardware fact. Dirty rectangles are the later mitigation.
+- Backlight is LEDC low-speed channel 0 on GPIO46: 5 kHz, 10-bit. Duty starts at 0. The drawer fades it on after the panel is up. A full swing is requested at 420 ms. At 5 kHz the fade hardware holds each duty step for 2 cycles, so the glass takes about 410 ms. A reverse mid-fade keeps that duty per millisecond. PWR (GPIO5) is active low with an internal pull-up. The scan ignores it until the pin has been seen released, then toggles after two pressed samples 20 ms apart.
 - One full RGB565 frame is 115200 bytes and about 12.3 ms on the wire. The drawer presents 1:1 in one 16-row DMA band (7680 bytes). A second full frame is not reserved.
 - Internal SRAM is 512 KB. DMA and the BLE controller live here. PSRAM cannot hold them.
 - PSRAM is 8 MB octal. The game arena is one 64 KB block here. The rest stays free so a stray heap allocation is visible.
 - Flash is 16 MB quad, not OPI. `sdkconfig.defaults` sets that.
 - `BAT_EN` (GPIO2) is driven high before any blocking call. USB Serial/JTAG dies in deep sleep. There is no I2C fuel gauge. Deep sleep is not used.
 - One I2C bus (GPIO41/42): QMI8658A `0x6B`, CST816D `0x15`, ES8311 `0x18`, ES7210 `0x40`. No second bus. This binary does not init I2C, so those devices stay down until one owner exists. Touch is one finger. The IMU has no magnetometer, so yaw is not observable.
-- PLUS is GPIO4 and BOOT is GPIO0, reserved as a later on-device fallback. PWR (GPIO5) is the power latch, not a game button.
+- PLUS is GPIO4 and BOOT is GPIO0, reserved as a later on-device fallback. PWR (GPIO5) is the power latch, not a game button. A press fades the backlight off or back on.
 - Wi-Fi stays off. Its DMA cannot live in PSRAM, and this game does not need it.
 - The speaker and ES8311 exist. PixelRoot32's I2S backend is a bare DAC, not this codec. Audio is not in this binary. See the sound section.
 - CPU is 240 MHz (`CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240`). ESP-IDF is 5.5 or newer. Target `esp32s3`.
@@ -145,6 +146,7 @@ The device block comes from `heap_caps_malloc` with `MALLOC_CAP_SPIRAM`, after B
 | BLE controller and host | internal | unmeasured | ESP-IDF | Fill from the first boot log |
 | FreeRTOS stacks, including the BT host task | internal | unmeasured | ESP-IDF | |
 | Present band | internal, DMA | 7680 | ST7789 drawer | 16 rows of 240 RGB565. One band, reused |
+| Backlight task stack | internal | 3072 | ST7789 drawer | Polls PWR. The fade itself is LEDC hardware |
 | Logical buffer | internal | 57600 | ST7789 drawer | 240×240 8bpp. Not a second RGB565 frame |
 | Game arena | PSRAM | 65536 | `arena` | Never freed |
 | `world` slice | arena | 4096 | `world` | SoA. The rectangle uses the first row |
@@ -156,7 +158,7 @@ Boot log, after the engine buffer exists: free internal heap, largest free inter
 
 ## Runtime
 
-`app_main` drives `BAT_EN` high, starts BLE, creates the arena, then `engine_host_run`. The drawer turns the backlight on after the panel is up. The PC `main` creates the arena and calls the same host. Neither target inits I2C, Wi-Fi, the codec, or the IMU.
+`app_main` drives `BAT_EN` high, starts BLE, creates the arena, then `engine_host_run`. The drawer fades the backlight on after the panel is up. PWR fades it off or back on. The PC `main` creates the arena and calls the same host. Neither target inits I2C, Wi-Fi, the codec, or the IMU.
 
 ## Decision log
 
@@ -172,4 +174,5 @@ Boot log, after the engine buffer exists: free internal heap, largest free inter
 | 2026-10-15 | One 64 KB PSRAM arena, carved once, never freed. BLE's byte cost stays unmeasured until the boot log |
 | 2026-10-15 | Nidhogg 1 art: 4-color screens, 1bpp or 2bpp, no copied assets. NES audio voices stay off. Later sound is PCM on the ES8311 |
 | 2026-10-15 | Touch and IMU stay off. Frame-time budgets stay open |
+| 2026-10-15 | Backlight is an LEDC fade on GPIO46. PWR fades it off and on. PLUS and BOOT stay unread |
 | 2026-10-15 | Build scripts live at the repo root. The PC window is titled ESPecter and draws its current frame rate |

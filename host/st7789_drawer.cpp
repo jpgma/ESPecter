@@ -1,6 +1,7 @@
 #include "st7789_drawer.h"
 
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_io.h"
@@ -9,6 +10,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -25,9 +27,109 @@ constexpr gpio_num_t k_mosi = GPIO_NUM_39;
 constexpr gpio_num_t k_dc = GPIO_NUM_45;
 constexpr gpio_num_t k_rst = GPIO_NUM_40;
 constexpr gpio_num_t k_bl = GPIO_NUM_46;
+constexpr gpio_num_t k_pwr = GPIO_NUM_5;
 constexpr int k_pclk_hz = 80 * 1000 * 1000;
+/* Fade de 420 ms: a 5 kHz o hardware segura cada degrau por 2 ciclos e o vidro leva cerca de 410 ms. */
+constexpr int k_bl_hz = 5000;
+constexpr uint32_t k_bl_duty_max = 1023;
+constexpr int k_bl_fade_ms = 420;
+constexpr int k_bl_scan_ms = 20;
+constexpr uint32_t k_bl_stack = 3072;
 
 const char *k_tag = "st7789";
+int g_bl_on = 1;
+int g_bl_armed;
+int g_bl_down;
+int g_bl_stable;
+
+/* [backlight_fade] Leva o duty do LEDC até aceso ou apagado, no mesmo ritmo de um swing cheio. */
+void backlight_fade(int on)
+{
+    const uint32_t target = on ? k_bl_duty_max : 0;
+    uint32_t cur;
+    uint32_t delta;
+    int ms;
+
+    ESP_ERROR_CHECK(ledc_fade_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0));
+    cur = ledc_get_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    delta = cur > target ? cur - target : target - cur;
+    if (delta == 0) {
+        return;
+    }
+    ms = static_cast<int>((delta * static_cast<uint32_t>(k_bl_fade_ms) + k_bl_duty_max - 1) / k_bl_duty_max);
+    ESP_ERROR_CHECK(ledc_set_fade_with_time(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, target, ms));
+    ESP_ERROR_CHECK(ledc_fade_start(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, LEDC_FADE_NO_WAIT));
+}
+
+/* [backlight_scan] Debounce do PWR e chama [backlight_fade] no press. */
+void backlight_scan(void)
+{
+    const int pressed = gpio_get_level(k_pwr) == 0;
+
+    if (!g_bl_armed) {
+        if (!pressed) {
+            g_bl_armed = 1;
+        }
+        return;
+    }
+    if (!pressed) {
+        g_bl_stable = 0;
+        g_bl_down = 0;
+        return;
+    }
+    if (g_bl_stable < 2) {
+        g_bl_stable++;
+    }
+    if (g_bl_stable < 2 || g_bl_down) {
+        return;
+    }
+    g_bl_down = 1;
+    g_bl_on = !g_bl_on;
+    backlight_fade(g_bl_on);
+    ESP_LOGI(k_tag, "backlight %s", g_bl_on ? "on" : "off");
+}
+
+/* [backlight_task] Chama [backlight_scan] a cada 20 ms. */
+void backlight_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        backlight_scan();
+        vTaskDelay(pdMS_TO_TICKS(k_bl_scan_ms));
+    }
+}
+
+/* [backlight_start] Configura o LEDC no GPIO46, acende com [backlight_fade] e sobe [backlight_task]. */
+void backlight_start(void)
+{
+    ledc_timer_config_t timer = {};
+    ledc_channel_config_t channel = {};
+    gpio_config_t key = {};
+
+    timer.speed_mode = LEDC_LOW_SPEED_MODE;
+    timer.duty_resolution = LEDC_TIMER_10_BIT;
+    timer.timer_num = LEDC_TIMER_0;
+    timer.freq_hz = k_bl_hz;
+    timer.clk_cfg = LEDC_AUTO_CLK;
+    channel.gpio_num = k_bl;
+    channel.speed_mode = LEDC_LOW_SPEED_MODE;
+    channel.channel = LEDC_CHANNEL_0;
+    channel.timer_sel = LEDC_TIMER_0;
+    channel.duty = 0;
+    channel.hpoint = 0;
+    key.pin_bit_mask = 1ull << k_pwr;
+    key.mode = GPIO_MODE_INPUT;
+    key.pull_up_en = GPIO_PULLUP_ENABLE;
+
+    ESP_ERROR_CHECK(ledc_timer_config(&timer));
+    ESP_ERROR_CHECK(ledc_channel_config(&channel));
+    ESP_ERROR_CHECK(ledc_fade_func_install(0));
+    backlight_fade(1);
+    ESP_ERROR_CHECK(gpio_config(&key));
+    if (xTaskCreate(backlight_task, "bl", k_bl_stack, nullptr, 1, nullptr) != pdPASS) {
+        ESP_LOGE(k_tag, "backlight task failed");
+    }
+}
 
 /* [spi_done_cb] Acorda a task quando o band SPI termina. */
 bool spi_done_cb(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
@@ -75,7 +177,7 @@ uint8_t st7789_drawer::index_for(uint16_t color)
     return 0;
 }
 
-/* [st7789_drawer::init] Sobe o SPI3, o panel e o backlight. */
+/* [st7789_drawer::init] Sobe o SPI3 e o panel, depois [backlight_start]. */
 void st7789_drawer::init()
 {
     spi_bus_config_t buscfg = {};
@@ -134,8 +236,7 @@ void st7789_drawer::init()
     callbacks.on_color_trans_done = spi_done_cb;
     ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io, &callbacks, done));
 
-    gpio_set_direction(k_bl, GPIO_MODE_OUTPUT);
-    gpio_set_level(k_bl, 1);
+    backlight_start();
 
     panel = lcd;
     panel_io = io;

@@ -11,7 +11,7 @@ public:
     /* [st7789_drawer::~st7789_drawer] Não libera o panel. O LCD fica ligado até o reset. */
     ~st7789_drawer() override;
 
-    /* [st7789_drawer::init] Sobe o SPI3, o panel e o backlight. */
+    /* [st7789_drawer::init] Sobe o SPI3 e o panel, depois [backlight_start]. */
     void init() override;
     /* [st7789_drawer::clearBuffer] Zera o framebuffer e a palette. */
     void clearBuffer() override;
