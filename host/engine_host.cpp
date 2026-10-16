@@ -618,7 +618,7 @@ void dark_timer_cb(void *arg)
     }
 }
 
-/* [host_sleep] Espera o PWR solto, para o central e entra em light sleep até o GPIO5 baixar. Na volta acende o backlight. */
+/* [host_sleep] Espera o PWR solto, para o central, segura os pads e entra em light sleep até o GPIO5 baixar. Na volta [st7789_resume] refaz o init e acende o backlight. */
 void host_sleep(void)
 {
     while (especter::st7789_pwr_down()) {
@@ -642,7 +642,9 @@ void host_sleep(void)
         return;
     }
     gpio_hold_en(GPIO_NUM_2);
+    especter::st7789_prepare_sleep();
     esp_light_sleep_start();
+    especter::st7789_resume();
     gpio_hold_dis(GPIO_NUM_2);
     especter::st7789_pwr_ready();
     pad_link_resume();

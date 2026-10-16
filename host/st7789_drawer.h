@@ -18,6 +18,10 @@ void st7789_bind_present(TaskHandle_t task);
 void st7789_hold_scan(int hold);
 /* [st7789_fade_on] Acende o backlight e engole o press do PWR que ainda está baixo. */
 void st7789_fade_on(void);
+/* [st7789_prepare_sleep] Deixa o RST alto e segura os pads do ST7789 para o light sleep. */
+void st7789_prepare_sleep(void);
+/* [st7789_resume] Solta os pads e repete o init do panel, sem pulsar o RST. */
+void st7789_resume(void);
 /* [st7789_pwr_down] Devolve 1 enquanto o PWR está pressionado. */
 int st7789_pwr_down(void);
 /* [st7789_pwr_pin] Devolve o GPIO do PWR. */

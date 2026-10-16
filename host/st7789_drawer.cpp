@@ -41,6 +41,7 @@ constexpr int k_bl_scan_ms = 20;
 constexpr uint32_t k_bl_stack = 3072;
 
 const char *k_tag = "st7789";
+esp_lcd_panel_handle_t g_lcd;
 int g_bl_on = 1;
 int g_bl_armed;
 int g_bl_down;
@@ -150,6 +151,22 @@ void backlight_task(void *arg)
     }
 }
 
+/* [panel_pins_hold] Segura ou solta CS, CLK, MOSI, DC e RST. Segurar também tira o sleep sel desses pads. */
+void panel_pins_hold(int hold)
+{
+    const gpio_num_t pins[] = {k_cs, k_clk, k_mosi, k_dc, k_rst};
+    int i;
+
+    for (i = 0; i < static_cast<int>(sizeof pins / sizeof pins[0]); i++) {
+        if (hold) {
+            gpio_sleep_sel_dis(pins[i]);
+            ESP_ERROR_CHECK(gpio_hold_en(pins[i]));
+        } else {
+            ESP_ERROR_CHECK(gpio_hold_dis(pins[i]));
+        }
+    }
+}
+
 /* [backlight_start] Configura o LEDC no GPIO46, registra [fade_end], acende com [backlight_fade] e sobe [backlight_task]. */
 void backlight_start(void)
 {
@@ -247,6 +264,7 @@ void st7789_fade_on(void)
     g_bl_hold = 0;
     portEXIT_CRITICAL(&g_bl_mux);
     backlight_fade(1);
+    ESP_LOGI(k_tag, "backlight on");
 }
 
 /* [st7789_pwr_down] Devolve 1 enquanto o PWR está pressionado. */
@@ -259,6 +277,26 @@ int st7789_pwr_down(void)
 gpio_num_t st7789_pwr_pin(void)
 {
     return k_pwr;
+}
+
+/* [st7789_prepare_sleep] Deixa o RST alto e chama [panel_pins_hold] para o light sleep não flutuar o ST7789. */
+void st7789_prepare_sleep(void)
+{
+    gpio_set_level(k_rst, 1);
+    panel_pins_hold(1);
+}
+
+/* [st7789_resume] Solta os pads com [panel_pins_hold] e repete o init, o invert e o DISPON. Não pulsa o RST. */
+void st7789_resume(void)
+{
+    panel_pins_hold(0);
+    if (g_lcd == nullptr) {
+        return;
+    }
+    ESP_ERROR_CHECK(esp_lcd_panel_init(g_lcd));
+    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(g_lcd, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(g_lcd, true));
+    ESP_LOGI(k_tag, "panel on");
 }
 
 /* [st7789_pwr_ready] Reaplica o PWR como entrada com pull-up depois do light sleep. */
@@ -358,6 +396,7 @@ void st7789_drawer::init()
 
     backlight_start();
 
+    g_lcd = lcd;
     panel = lcd;
     panel_io = io;
     spi_done = done;
