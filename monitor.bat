@@ -2,7 +2,16 @@
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
-if not defined IDF_PATH set "IDF_PATH=%USERPROFILE%\esp\esp-idf"
+if not defined IDF_PATH (
+    if exist "%USERPROFILE%\esp\esp-idf\export.bat" (
+        set "IDF_PATH=%USERPROFILE%\esp\esp-idf"
+    ) else if exist "D:\esp\esp-idf\export.bat" (
+        set "IDF_PATH=D:\esp\esp-idf"
+    ) else (
+        set "IDF_PATH=%USERPROFILE%\esp\esp-idf"
+    )
+)
+if not defined IDF_TOOLS_PATH if exist "D:\esp\.espressif\idf-env.json" set "IDF_TOOLS_PATH=D:\esp\.espressif"
 if not exist "%IDF_PATH%\export.bat" (
     echo ESP-IDF export.bat not found at %IDF_PATH%
     echo Install ESP-IDF 5.5 or set IDF_PATH.

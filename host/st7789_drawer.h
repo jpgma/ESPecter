@@ -2,7 +2,28 @@
 
 #include "graphics/BaseDrawSurface.h"
 
+#include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 namespace especter {
+
+/* [st7789_lit] Devolve 1 enquanto o fade pedido está aceso ou o duty ainda não chegou a 0. */
+int st7789_lit(void);
+/* [st7789_take_dark] Devolve 1 uma vez quando o duty chega a 0. */
+int st7789_take_dark(void);
+/* [st7789_bind_present] Guarda a task que [st7789_fade_on] acorda. */
+void st7789_bind_present(TaskHandle_t task);
+/* [st7789_hold_scan] Enquanto ligado, [backlight_scan] não troca o fade. */
+void st7789_hold_scan(int hold);
+/* [st7789_fade_on] Acende o backlight e engole o press do PWR que ainda está baixo. */
+void st7789_fade_on(void);
+/* [st7789_pwr_down] Devolve 1 enquanto o PWR está pressionado. */
+int st7789_pwr_down(void);
+/* [st7789_pwr_pin] Devolve o GPIO do PWR. */
+gpio_num_t st7789_pwr_pin(void);
+/* [st7789_pwr_ready] Reaplica o PWR como entrada com pull-up depois do light sleep. */
+void st7789_pwr_ready(void);
 
 class st7789_drawer : public pixelroot32::graphics::BaseDrawSurface {
 public:

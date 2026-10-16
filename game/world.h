@@ -10,6 +10,7 @@ extern "C" {
 #define WORLD_VIEW 240
 #define WORLD_BODY_W 8
 #define WORLD_BODY_H 12
+#define WORLD_SOLID_CAP 256
 
 /* [world_init] Monta o corpo no spawn, o percurso fixo na slice de [arena_level], o checkpoint no spawn e a câmera com a mola parada. Devolve 0 se [arena_ready] servir. */
 int world_init(void);

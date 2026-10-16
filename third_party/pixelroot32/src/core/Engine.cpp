@@ -273,8 +273,6 @@ namespace pixelroot32::core {
                 lastHeartbeat = millis();
             }
 
-            update();
-
             uint32_t t1 = 0;
             if constexpr (pixelroot32::platforms::config::EnableProfiling) {
                 t1 = pixelroot32::platforms::config::profilerMicros();

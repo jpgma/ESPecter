@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "host/ble_hs.h"
 #include "host/ble_store.h"
@@ -42,6 +43,10 @@ static int64_t s_attempt_us;
 static struct ble_npl_callout s_watch;
 static struct ble_npl_callout s_boot;
 static int s_drop;
+static int s_asleep;
+static int s_host_up;
+static SemaphoreHandle_t s_paused;
+static struct ble_npl_event s_pause_ev;
 static int s_boot_armed;
 static int s_boot_down;
 static int s_boot_stable;
@@ -404,6 +409,9 @@ static void start_scan(void)
     struct ble_gap_disc_params params = {0};
     int rc;
 
+    if (s_asleep) {
+        return;
+    }
     rc = ble_hs_id_infer_auto(0, &own_addr_type);
     if (rc != 0) {
         set_link(PAD_LINK_DOWN);
@@ -432,6 +440,9 @@ static void watch_cb(struct ble_npl_event *ev)
     int64_t age = esp_timer_get_time() - s_attempt_us;
 
     (void)ev;
+    if (s_asleep) {
+        return;
+    }
     if (s_phase == PHASE_IDLE || (s_phase == PHASE_SCAN && !ble_gap_disc_active())) {
         start_scan();
     } else if (s_phase == PHASE_CONNECTING && age > 8000000) {
@@ -474,6 +485,9 @@ static void on_sync(void)
 static void boot_cb(struct ble_npl_event *ev)
 {
     (void)ev;
+    if (s_asleep || !s_host_up) {
+        return;
+    }
     ESP_LOGI(TAG, "boot reset");
     s_drop = 1;
     clear_buttons();
@@ -520,7 +534,9 @@ static void boot_scan(void)
             s_boot_down = 1;
             if (s_boot_wait > 0) {
                 s_boot_wait = 0;
-                ble_npl_callout_reset(&s_boot, 0);
+                if (s_host_up && !s_asleep) {
+                    ble_npl_callout_reset(&s_boot, 0);
+                }
                 return;
             }
             s_boot_wait = 20;
@@ -598,11 +614,9 @@ static void host_task(void *param)
     nimble_port_freertos_deinit();
 }
 
-/* [pad_link_start] Sobe o NimBLE central, a task do BOOT e do PLUS, e procura o Pad Emu. O NVS já está de pé por [nvs_start]. */
-void pad_link_start(void)
+/* [host_configure] Liga os callbacks do host e o store. */
+static void host_configure(void)
 {
-    ESP_ERROR_CHECK(nimble_port_init());
-
     ble_hs_cfg.reset_cb = on_reset;
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
@@ -611,8 +625,95 @@ void pad_link_start(void)
     ble_hs_cfg.sm_mitm = 0;
     ble_hs_cfg.sm_sc = 0;
     ble_store_config_init();
+}
+
+/* [pause_cb] Cancela o scan e a conexão na fila do host e solta [pad_link_pause]. */
+static void pause_cb(struct ble_npl_event *ev)
+{
+    (void)ev;
+    if (!s_asleep) {
+        if (s_paused != NULL) {
+            xSemaphoreGive(s_paused);
+        }
+        return;
+    }
+    ble_npl_callout_stop(&s_watch);
+    ble_npl_callout_deinit(&s_watch);
+    ble_npl_callout_stop(&s_boot);
+    ble_npl_callout_deinit(&s_boot);
+    s_drop = 1;
+    clear_buttons();
+    set_link(PAD_LINK_DOWN);
+    if (s_have_conn) {
+        ble_gap_terminate(s_conn, BLE_ERR_REM_USER_CONN_TERM);
+    } else if (s_phase == PHASE_CONNECTING) {
+        ble_gap_conn_cancel();
+    } else if (s_phase == PHASE_SCAN && ble_gap_disc_active()) {
+        ble_gap_disc_cancel();
+    }
+    s_phase = PHASE_IDLE;
+    if (s_paused != NULL) {
+        xSemaphoreGive(s_paused);
+    }
+}
+
+/* [pad_link_start] Sobe o NimBLE central, a task do BOOT e do PLUS, e procura o Pad Emu. O NVS já está de pé por [nvs_start]. */
+void pad_link_start(void)
+{
+    ESP_ERROR_CHECK(nimble_port_init());
+    host_configure();
     ble_npl_callout_init(&s_watch, nimble_port_get_dflt_eventq(), watch_cb, NULL);
     boot_start();
+    s_host_up = 1;
+    nimble_port_freertos_init(host_task);
+    ble_npl_callout_reset(&s_watch, ble_npl_time_ms_to_ticks32(2000));
+}
+
+/* [pad_link_pause] Para o central e o controller. Devolve 0 se o rádio ficou quieto. */
+int pad_link_pause(void)
+{
+    if (!s_host_up) {
+        return 0;
+    }
+    if (s_paused == NULL) {
+        s_paused = xSemaphoreCreateBinary();
+        if (s_paused == NULL) {
+            return -1;
+        }
+    }
+    xSemaphoreTake(s_paused, 0);
+    s_asleep = 1;
+    ble_npl_event_init(&s_pause_ev, pause_cb, NULL);
+    ble_npl_eventq_put(nimble_port_get_dflt_eventq(), &s_pause_ev);
+    if (xSemaphoreTake(s_paused, pdMS_TO_TICKS(2000)) != pdTRUE) {
+        s_asleep = 0;
+        return -1;
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+    if (nimble_port_stop() != 0) {
+        s_asleep = 0;
+        ble_npl_callout_init(&s_watch, nimble_port_get_dflt_eventq(), watch_cb, NULL);
+        ble_npl_callout_init(&s_boot, nimble_port_get_dflt_eventq(), boot_cb, NULL);
+        ble_npl_callout_reset(&s_watch, ble_npl_time_ms_to_ticks32(2000));
+        return -1;
+    }
+    nimble_port_deinit();
+    s_host_up = 0;
+    return 0;
+}
+
+/* [pad_link_resume] Sobe o central de novo e volta a escanear. */
+void pad_link_resume(void)
+{
+    s_drop = 0;
+    s_have_conn = 0;
+    s_phase = PHASE_IDLE;
+    ESP_ERROR_CHECK(nimble_port_init());
+    host_configure();
+    ble_npl_callout_init(&s_watch, nimble_port_get_dflt_eventq(), watch_cb, NULL);
+    ble_npl_callout_init(&s_boot, nimble_port_get_dflt_eventq(), boot_cb, NULL);
+    s_asleep = 0;
+    s_host_up = 1;
     nimble_port_freertos_init(host_task);
     ble_npl_callout_reset(&s_watch, ble_npl_time_ms_to_ticks32(2000));
 }

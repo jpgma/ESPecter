@@ -11,9 +11,11 @@
 #include "esp_lcd_panel_vendor.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 
@@ -43,8 +45,33 @@ int g_bl_on = 1;
 int g_bl_armed;
 int g_bl_down;
 int g_bl_stable;
+int g_bl_hold;
+portMUX_TYPE g_bl_mux = portMUX_INITIALIZER_UNLOCKED;
+std::atomic<int> g_lit{1};
+std::atomic<int> g_want_on{1};
+std::atomic<int> g_dark_pending{0};
+TaskHandle_t g_present;
 
-/* [backlight_fade] Leva o duty do LEDC até aceso ou apagado, no mesmo ritmo de um swing cheio. */
+/* [notify_present] Acorda a task de [st7789_bind_present]. */
+void notify_present(void)
+{
+    if (g_present != nullptr) {
+        xTaskNotifyGive(g_present);
+    }
+}
+
+/* [fade_end] Marca o vidro apagado quando o duty pedido chega a 0. */
+bool fade_end(const ledc_cb_param_t *param, void *user_arg)
+{
+    (void)user_arg;
+    if (param->duty == 0 && g_want_on.load(std::memory_order_acquire) == 0) {
+        g_lit.store(0, std::memory_order_release);
+        g_dark_pending.store(1, std::memory_order_release);
+    }
+    return false;
+}
+
+/* [backlight_fade] Leva o duty do LEDC até aceso ou apagado, no mesmo ritmo de um swing cheio. Aceso marca o vidro ligado e acorda o present. */
 void backlight_fade(int on)
 {
     const uint32_t target = on ? k_bl_duty_max : 0;
@@ -52,6 +79,12 @@ void backlight_fade(int on)
     uint32_t delta;
     int ms;
 
+    g_want_on.store(on ? 1 : 0, std::memory_order_release);
+    if (on) {
+        g_lit.store(1, std::memory_order_release);
+        g_dark_pending.store(0, std::memory_order_release);
+        notify_present();
+    }
     ESP_ERROR_CHECK(ledc_fade_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0));
     cur = ledc_get_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
     delta = cur > target ? cur - target : target - cur;
@@ -63,32 +96,48 @@ void backlight_fade(int on)
     ESP_ERROR_CHECK(ledc_fade_start(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, LEDC_FADE_NO_WAIT));
 }
 
-/* [backlight_scan] Debounce do PWR e chama [backlight_fade] no press. */
+/* [backlight_scan] Debounce do PWR e chama [backlight_fade] no press. Com [st7789_hold_scan] não troca o fade. */
 void backlight_scan(void)
 {
-    const int pressed = gpio_get_level(k_pwr) == 0;
+    int pressed;
+    int on = 0;
+    int edge = 0;
 
+    portENTER_CRITICAL(&g_bl_mux);
+    if (g_bl_hold) {
+        portEXIT_CRITICAL(&g_bl_mux);
+        return;
+    }
+    pressed = gpio_get_level(k_pwr) == 0;
     if (!g_bl_armed) {
         if (!pressed) {
             g_bl_armed = 1;
         }
+        portEXIT_CRITICAL(&g_bl_mux);
         return;
     }
     if (!pressed) {
         g_bl_stable = 0;
         g_bl_down = 0;
+        portEXIT_CRITICAL(&g_bl_mux);
         return;
     }
     if (g_bl_stable < 2) {
         g_bl_stable++;
     }
     if (g_bl_stable < 2 || g_bl_down) {
+        portEXIT_CRITICAL(&g_bl_mux);
         return;
     }
     g_bl_down = 1;
     g_bl_on = !g_bl_on;
-    backlight_fade(g_bl_on);
-    ESP_LOGI(k_tag, "backlight %s", g_bl_on ? "on" : "off");
+    on = g_bl_on;
+    edge = 1;
+    portEXIT_CRITICAL(&g_bl_mux);
+    if (edge) {
+        backlight_fade(on);
+        ESP_LOGI(k_tag, "backlight %s", on ? "on" : "off");
+    }
 }
 
 /* [backlight_task] Chama [backlight_scan] a cada 20 ms. */
@@ -101,7 +150,7 @@ void backlight_task(void *arg)
     }
 }
 
-/* [backlight_start] Configura o LEDC no GPIO46, acende com [backlight_fade] e sobe [backlight_task]. */
+/* [backlight_start] Configura o LEDC no GPIO46, registra [fade_end], acende com [backlight_fade] e sobe [backlight_task]. */
 void backlight_start(void)
 {
     ledc_timer_config_t timer = {};
@@ -123,9 +172,13 @@ void backlight_start(void)
     key.mode = GPIO_MODE_INPUT;
     key.pull_up_en = GPIO_PULLUP_ENABLE;
 
+    ledc_cbs_t cbs = {};
+
+    cbs.fade_cb = fade_end;
     ESP_ERROR_CHECK(ledc_timer_config(&timer));
     ESP_ERROR_CHECK(ledc_channel_config(&channel));
     ESP_ERROR_CHECK(ledc_fade_func_install(0));
+    ESP_ERROR_CHECK(ledc_cb_register(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, &cbs, nullptr));
     backlight_fade(1);
     ESP_ERROR_CHECK(gpio_config(&key));
     if (xTaskCreate(backlight_task, "bl", k_bl_stack, nullptr, 1, nullptr) != pdPASS) {
@@ -157,6 +210,67 @@ bool spi_done_cb(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data
 } // namespace
 
 namespace especter {
+
+/* [st7789_lit] Devolve 1 enquanto o fade pedido está aceso ou o duty ainda não chegou a 0. */
+int st7789_lit(void)
+{
+    return g_lit.load(std::memory_order_acquire);
+}
+
+/* [st7789_take_dark] Devolve 1 uma vez quando o duty chega a 0. */
+int st7789_take_dark(void)
+{
+    return g_dark_pending.exchange(0, std::memory_order_acq_rel);
+}
+
+/* [st7789_bind_present] Guarda a task que [st7789_fade_on] acorda. */
+void st7789_bind_present(TaskHandle_t task)
+{
+    g_present = task;
+}
+
+/* [st7789_hold_scan] Enquanto ligado, [backlight_scan] não troca o fade. */
+void st7789_hold_scan(int hold)
+{
+    portENTER_CRITICAL(&g_bl_mux);
+    g_bl_hold = hold ? 1 : 0;
+    portEXIT_CRITICAL(&g_bl_mux);
+}
+
+/* [st7789_fade_on] Acende o backlight e engole o press do PWR que ainda está baixo. */
+void st7789_fade_on(void)
+{
+    portENTER_CRITICAL(&g_bl_mux);
+    g_bl_on = 1;
+    g_bl_down = 1;
+    g_bl_stable = 2;
+    g_bl_hold = 0;
+    portEXIT_CRITICAL(&g_bl_mux);
+    backlight_fade(1);
+}
+
+/* [st7789_pwr_down] Devolve 1 enquanto o PWR está pressionado. */
+int st7789_pwr_down(void)
+{
+    return gpio_get_level(k_pwr) == 0;
+}
+
+/* [st7789_pwr_pin] Devolve o GPIO do PWR. */
+gpio_num_t st7789_pwr_pin(void)
+{
+    return k_pwr;
+}
+
+/* [st7789_pwr_ready] Reaplica o PWR como entrada com pull-up depois do light sleep. */
+void st7789_pwr_ready(void)
+{
+    gpio_config_t key = {};
+
+    key.pin_bit_mask = 1ull << k_pwr;
+    key.mode = GPIO_MODE_INPUT;
+    key.pull_up_en = GPIO_PULLUP_ENABLE;
+    ESP_ERROR_CHECK(gpio_config(&key));
+}
 
 /* [st7789_drawer] Deixa o panel fechado. [st7789_drawer::init] aloca o framebuffer. */
 st7789_drawer::st7789_drawer()

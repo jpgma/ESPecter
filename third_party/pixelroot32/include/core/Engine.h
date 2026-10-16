@@ -94,8 +94,10 @@ public:
     /**
      * @brief Starts the main game loop.
      *
-     * Infinite loop: update() each iteration; draw() and present() only when the active
-     * scene's Scene::shouldRedrawFramebuffer() is true (always when PIXELROOT32_ENABLE_DEBUG_OVERLAY).
+     * Native builds loop until the window closes: update(), then draw() and present() when the
+     * active scene's Scene::shouldRedrawFramebuffer() is true (always when
+     * PIXELROOT32_ENABLE_DEBUG_OVERLAY). The device build paints one frame and returns, and
+     * that frame does not call update().
      */
     void run();
 

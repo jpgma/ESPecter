@@ -2,7 +2,16 @@
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
-if not defined IDF_PATH set "IDF_PATH=%USERPROFILE%\esp\esp-idf"
+if not defined IDF_PATH (
+    if exist "%USERPROFILE%\esp\esp-idf\export.bat" (
+        set "IDF_PATH=%USERPROFILE%\esp\esp-idf"
+    ) else if exist "D:\esp\esp-idf\export.bat" (
+        set "IDF_PATH=D:\esp\esp-idf"
+    ) else (
+        set "IDF_PATH=%USERPROFILE%\esp\esp-idf"
+    )
+)
+if not defined IDF_TOOLS_PATH if exist "D:\esp\.espressif\idf-env.json" set "IDF_TOOLS_PATH=D:\esp\.espressif"
 if not exist "%IDF_PATH%\export.bat" (
     echo ESP-IDF export.bat not found at %IDF_PATH%
     echo Install ESP-IDF 5.5 or set IDF_PATH.
@@ -32,7 +41,7 @@ echo.
 echo   flash.bat
 echo   flash.bat --port COM5
 echo.
-echo ESP-IDF is %%USERPROFILE%%\esp\esp-idf, or IDF_PATH if that is already set.
+echo ESP-IDF is %%USERPROFILE%%\esp\esp-idf, D:\esp\esp-idf, or IDF_PATH if that is already set.
 echo PixelRoot32 sources live in third_party. A missing Engine.h or ApuCore.h stops the script.
 echo A build directory without CMakeCache.txt is deleted before set-target.
 echo Each step prints how long it took.

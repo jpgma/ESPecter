@@ -5,7 +5,7 @@ A small 2D platformer for the Waveshare ESP32-S3-Touch-LCD-1.54. Decisions live 
 ## Prerequisites
 
 - Git.
-- For the board: ESP-IDF 5.5 or newer. `flash.bat` uses `IDF_PATH`, or `%USERPROFILE%\esp\esp-idf` if that is unset.
+- For the board: ESP-IDF 5.5 or newer. `flash.bat` uses `IDF_PATH`, then `%USERPROFILE%\esp\esp-idf`, then `D:\esp\esp-idf`.
 - For the PC: CMake and a C++ compiler. The PC script fetches SDL2. It does not need MSYS2.
 
 ## Checkout
