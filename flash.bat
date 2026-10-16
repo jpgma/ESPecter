@@ -45,10 +45,10 @@ call :tick T
 if not defined PORT (
     for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "$p = @(Get-CimInstance Win32_PnPEntity | Where-Object { $_.DeviceID -match 'VID_303A' -and $_.Name -match '\(COM\d+\)' }); if ($p.Count -eq 0) { exit 2 }; if ($p.Count -gt 1) { $p | ForEach-Object { [Console]::Error.WriteLine($_.Name) }; exit 3 }; if ($p[0].Name -match '\((COM\d+)\)') { $Matches[1] }"`) do set "PORT=%%p"
 )
-set "RC=0"
-if not defined PORT set "RC=1"
+set "ERR=0"
+if not defined PORT set "ERR=1"
 call :tock "!T!" "port"
-if !RC! neq 0 (
+if !ERR! neq 0 (
     echo No Espressif USB serial port found. Plug in the board, or pass --port COMx.
     exit /b 1
 )
@@ -60,56 +60,56 @@ call :tick T
 set "NEED_SUBMODULES=0"
 if not exist "third_party\pixelroot32\include\core\Engine.h" set "NEED_SUBMODULES=1"
 if not exist "third_party\pixelroot32-apu\include\pixelroot32\apu\ApuCore.h" set "NEED_SUBMODULES=1"
-set "RC=0"
+set "ERR=0"
 if "!NEED_SUBMODULES!"=="1" (
     echo PixelRoot32 is missing. Running git submodule update --init
     git submodule update --init
-    set "RC=!ERRORLEVEL!"
+    set "ERR=!ERRORLEVEL!"
 )
-if !RC! equ 0 if not exist "third_party\pixelroot32\include\core\Engine.h" set "RC=1"
-if !RC! equ 0 if not exist "third_party\pixelroot32-apu\include\pixelroot32\apu\ApuCore.h" set "RC=1"
+if !ERR! equ 0 if not exist "third_party\pixelroot32\include\core\Engine.h" set "ERR=1"
+if !ERR! equ 0 if not exist "third_party\pixelroot32-apu\include\pixelroot32\apu\ApuCore.h" set "ERR=1"
 call :tock "!T!" "submodules"
-if !RC! neq 0 (
+if !ERR! neq 0 (
     echo git submodule update --init failed
-    exit /b !RC!
+    exit /b !ERR!
 )
 
 call :tick T
-set "RC=0"
+set "ERR=0"
 if exist build if not exist "build\CMakeCache.txt" (
     echo Removing incomplete build directory
     rmdir /s /q build
-    if exist build set "RC=1"
+    if exist build set "ERR=1"
 )
 call :tock "!T!" "build directory"
-if !RC! neq 0 (
+if !ERR! neq 0 (
     echo Could not remove the build directory.
-    exit /b !RC!
+    exit /b !ERR!
 )
 
 call :tick T
 call "%IDF_PATH%\export.bat"
-set "RC=!ERRORLEVEL!"
+set "ERR=!ERRORLEVEL!"
 call :tock "!T!" "esp-idf"
-if !RC! neq 0 (
+if !ERR! neq 0 (
     echo export.bat failed
-    exit /b !RC!
+    exit /b !ERR!
 )
 
 if not exist sdkconfig (
     call :tick T
     idf.py set-target esp32s3
-    set "RC=!ERRORLEVEL!"
+    set "ERR=!ERRORLEVEL!"
     call :tock "!T!" "set-target"
-    if !RC! neq 0 exit /b !RC!
+    if !ERR! neq 0 exit /b !ERR!
 )
 
 call :tick T
 idf.py -p !PORT! build flash
-set "RC=!ERRORLEVEL!"
+set "ERR=!ERRORLEVEL!"
 call :tock "!T!" "build flash"
 call :tock "!START!" "total"
-exit /b !RC!
+exit /b !ERR!
 
 :tick
 set "NOW=!TIME: =0!"

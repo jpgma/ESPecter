@@ -12,19 +12,19 @@ if not exist "%IDF_PATH%\export.bat" (
 call :tick START
 call :tick T
 call "%IDF_PATH%\export.bat"
-set "RC=!ERRORLEVEL!"
+set "ERR=!ERRORLEVEL!"
 call :tock "!T!" "esp-idf"
-if !RC! neq 0 (
+if !ERR! neq 0 (
     echo export.bat failed
-    exit /b !RC!
+    exit /b !ERR!
 )
 
 call :tick T
 idf.py monitor
-set "RC=!ERRORLEVEL!"
+set "ERR=!ERRORLEVEL!"
 call :tock "!T!" "monitor"
 call :tock "!START!" "total"
-exit /b !RC!
+exit /b !ERR!
 
 :tick
 set "NOW=!TIME: =0!"

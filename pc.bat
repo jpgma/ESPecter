@@ -9,18 +9,18 @@ if errorlevel 1 (
     set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
     if not exist "!VSWHERE!" (
         echo cmake was not found on PATH, and vswhere.exe is missing.
-        set "RC=1"
+        set "ERR=1"
         goto toolchain_done
     )
     for /f "usebackq delims=" %%i in (`"!VSWHERE!" -latest -products * -property installationPath`) do set "VSINSTALL=%%i"
     if not defined VSINSTALL (
         echo Visual Studio was not found.
-        set "RC=1"
+        set "ERR=1"
         goto toolchain_done
     )
     if not exist "!VSINSTALL!\VC\Auxiliary\Build\vcvars64.bat" (
         echo vcvars64.bat was not found under !VSINSTALL!
-        set "RC=1"
+        set "ERR=1"
         goto toolchain_done
     )
     call "!VSINSTALL!\VC\Auxiliary\Build\vcvars64.bat" >nul
@@ -33,11 +33,11 @@ if errorlevel 1 (
 )
 
 where cmake >nul 2>&1
-set "RC=!ERRORLEVEL!"
-if !RC! neq 0 echo cmake was not found on PATH.
+set "ERR=!ERRORLEVEL!"
+if !ERR! neq 0 echo cmake was not found on PATH.
 :toolchain_done
 call :tock "!T!" "toolchain"
-if !RC! neq 0 exit /b !RC!
+if !ERR! neq 0 exit /b !ERR!
 
 call :tick T
 cmake -S pc -B build-pc -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -45,31 +45,31 @@ if errorlevel 1 (
     echo Ninja configure failed. Trying the default generator.
     cmake -S pc -B build-pc -DCMAKE_BUILD_TYPE=Release
 )
-set "RC=!ERRORLEVEL!"
+set "ERR=!ERRORLEVEL!"
 call :tock "!T!" "configure"
-if !RC! neq 0 exit /b !RC!
+if !ERR! neq 0 exit /b !ERR!
 
 call :tick T
 cmake --build build-pc --config Release
-set "RC=!ERRORLEVEL!"
+set "ERR=!ERRORLEVEL!"
 call :tock "!T!" "build"
-if !RC! neq 0 exit /b !RC!
+if !ERR! neq 0 exit /b !ERR!
 
 call :tick T
-set "RC=0"
+set "ERR=0"
 if exist "build-pc\especter_pc.exe" (
     "build-pc\especter_pc.exe"
-    set "RC=!ERRORLEVEL!"
+    set "ERR=!ERRORLEVEL!"
 ) else if exist "build-pc\Release\especter_pc.exe" (
     "build-pc\Release\especter_pc.exe"
-    set "RC=!ERRORLEVEL!"
+    set "ERR=!ERRORLEVEL!"
 ) else (
     echo Built, but especter_pc.exe was not found under build-pc.
-    set "RC=1"
+    set "ERR=1"
 )
 call :tock "!T!" "run"
 call :tock "!START!" "total"
-exit /b !RC!
+exit /b !ERR!
 
 :tick
 set "NOW=!TIME: =0!"
