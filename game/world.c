@@ -10,7 +10,9 @@
 #define WORLD_GRAVITY_FALL 256
 #define WORLD_JUMP_VY (-2048)
 #define WORLD_FALL_MAX 2048
-#define WORLD_COLS 11
+#define WORLD_SLIDE_MAX 256
+#define WORLD_WALL_JUMP 1448
+#define WORLD_COLS 12
 
 static int *row_x;
 static int *row_y;
@@ -23,6 +25,7 @@ static int *row_hit_right;
 static int *row_hit_floor;
 static int *row_hit_ceil;
 static int *row_jump_was;
+static int *row_wall;
 static int row_count;
 
 /* [body_span] Devolve o maior subpixel em que o Rect cabe na View. */
@@ -31,31 +34,52 @@ static int body_span(void)
     return (WORLD_VIEW - WORLD_RECT) << WORLD_SUB;
 }
 
-/* [body_run] Acelera ou atrita vx segundo move_left e move_right. */
+/* [body_latched] Devolve 1 se o latch de parede segura o corpo. */
+static int body_latched(void)
+{
+    return row_wall[0] != 0;
+}
+
+/* [body_run] Acelera ou atrita vx. O latch e o sangramento acima do teto de corrida ignoram o eixo. */
 static void body_run(const actions *input)
 {
     int vx;
 
-    vx = row_vx[0];
-    if (input->move_left && !input->move_right) {
-        vx -= WORLD_RUN_ACCEL;
-    } else if (input->move_right && !input->move_left) {
-        vx += WORLD_RUN_ACCEL;
-    } else if (vx > 0) {
-        vx -= WORLD_RUN_ACCEL;
-        if (vx < 0) {
-            vx = 0;
-        }
-    } else if (vx < 0) {
-        vx += WORLD_RUN_ACCEL;
-        if (vx > 0) {
-            vx = 0;
-        }
+    if (body_latched()) {
+        return;
     }
+    vx = row_vx[0];
     if (vx > WORLD_RUN_MAX) {
-        vx = WORLD_RUN_MAX;
+        vx -= WORLD_RUN_ACCEL;
+        if (vx < WORLD_RUN_MAX) {
+            vx = WORLD_RUN_MAX;
+        }
     } else if (vx < -WORLD_RUN_MAX) {
-        vx = -WORLD_RUN_MAX;
+        vx += WORLD_RUN_ACCEL;
+        if (vx > -WORLD_RUN_MAX) {
+            vx = -WORLD_RUN_MAX;
+        }
+    } else {
+        if (input->move_left && !input->move_right) {
+            vx -= WORLD_RUN_ACCEL;
+        } else if (input->move_right && !input->move_left) {
+            vx += WORLD_RUN_ACCEL;
+        } else if (vx > 0) {
+            vx -= WORLD_RUN_ACCEL;
+            if (vx < 0) {
+                vx = 0;
+            }
+        } else if (vx < 0) {
+            vx += WORLD_RUN_ACCEL;
+            if (vx > 0) {
+                vx = 0;
+            }
+        }
+        if (vx > WORLD_RUN_MAX) {
+            vx = WORLD_RUN_MAX;
+        } else if (vx < -WORLD_RUN_MAX) {
+            vx = -WORLD_RUN_MAX;
+        }
     }
     row_vx[0] = vx;
 }
@@ -77,8 +101,16 @@ static void body_gravity(const actions *input)
     row_vy[0] = vy;
 }
 
-/* [body_solve_x] Soma vx e encosta o corpo nas bordas verticais. */
-static void body_solve_x(void)
+/* [body_slide] Limita a queda enquanto [body_latched] vale. */
+static void body_slide(void)
+{
+    if (body_latched() && row_vy[0] > WORLD_SLIDE_MAX) {
+        row_vy[0] = WORLD_SLIDE_MAX;
+    }
+}
+
+/* [body_solve_x] Soma vx, encosta nas bordas verticais e grava o latch. */
+static void body_solve_x(const actions *input)
 {
     int x;
     int span;
@@ -91,15 +123,25 @@ static void body_solve_x(void)
         x = 0;
         row_vx[0] = 0;
         row_hit_left[0] = 1;
+        if (!input->move_down) {
+            row_wall[0] = -1;
+        }
     } else if (x > span) {
         x = span;
         row_vx[0] = 0;
         row_hit_right[0] = 1;
+        if (!input->move_down) {
+            row_wall[0] = 1;
+        }
+    } else if (row_wall[0] < 0 && x > 0) {
+        row_wall[0] = 0;
+    } else if (row_wall[0] > 0 && x < span) {
+        row_wall[0] = 0;
     }
     row_x[0] = x;
 }
 
-/* [body_solve_y] Soma vy e encosta o corpo nas bordas horizontais. */
+/* [body_solve_y] Soma vy, encosta nas bordas horizontais e o chão solta o latch. */
 static void body_solve_y(void)
 {
     int y;
@@ -117,16 +159,28 @@ static void body_solve_y(void)
         y = span;
         row_vy[0] = 0;
         row_hit_floor[0] = 1;
+        row_wall[0] = 0;
     }
     row_y[0] = y;
 }
 
-/* [body_jump] Impulsiona vy se a borda de jump achou o chão de [body_solve_y]. */
+/* [body_jump] Impulsiona no chão, ou na diagonal se o latch de [body_solve_x] vale. */
 static void body_jump(const actions *input)
 {
-    if (input->jump && !row_jump_was[0] && row_hit_floor[0]) {
+    int edge;
+
+    edge = input->jump && !row_jump_was[0];
+    if (edge && row_hit_floor[0]) {
         row_vy[0] = WORLD_JUMP_VY;
         row_hit_floor[0] = 0;
+    } else if (edge && body_latched()) {
+        if (row_wall[0] < 0) {
+            row_vx[0] = WORLD_WALL_JUMP;
+        } else {
+            row_vx[0] = -WORLD_WALL_JUMP;
+        }
+        row_vy[0] = -WORLD_WALL_JUMP;
+        row_wall[0] = 0;
     }
     row_jump_was[0] = input->jump ? 1 : 0;
 }
@@ -159,6 +213,7 @@ int world_init(void)
     row_hit_floor = rows + WORLD_CAP * 8;
     row_hit_ceil = rows + WORLD_CAP * 9;
     row_jump_was = rows + WORLD_CAP * 10;
+    row_wall = rows + WORLD_CAP * 11;
     row_count = 1;
     origin = ((WORLD_VIEW - WORLD_RECT) / 2) << WORLD_SUB;
     row_x[0] = origin;
@@ -172,18 +227,23 @@ int world_init(void)
     row_hit_floor[0] = 0;
     row_hit_ceil[0] = 0;
     row_jump_was[0] = 0;
+    row_wall[0] = 0;
     return 0;
 }
 
-/* [world_tick] Integra um tick fixo com as actions de [actions_capture]. */
+/* [world_tick] Integra um tick fixo; move_down solta o latch antes da corrida. */
 void world_tick(const actions *input)
 {
     if (row_count < 1 || input == 0) {
         return;
     }
+    if (input->move_down) {
+        row_wall[0] = 0;
+    }
     body_run(input);
     body_gravity(input);
-    body_solve_x();
+    body_slide();
+    body_solve_x(input);
     body_solve_y();
     body_jump(input);
 }

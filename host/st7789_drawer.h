@@ -11,9 +11,9 @@ public:
     /* [st7789_drawer::~st7789_drawer] Não libera o panel. O LCD fica ligado até o reset. */
     ~st7789_drawer() override;
 
-    /* [st7789_drawer::init] Sobe o SPI3, dois bands DMA e o panel, depois [backlight_start]. */
+    /* [st7789_drawer::init] Sobe o SPI3, dois bands DMA e o panel, zera os índices uma vez, depois [backlight_start]. */
     void init() override;
-    /* [st7789_drawer::clearBuffer] Zera o framebuffer e a palette. */
+    /* [st7789_drawer::clearBuffer] Reinicia a palette. Os índices ficam; a cena cobre a View. */
     void clearBuffer() override;
     /* [st7789_drawer::sendBuffer] Converte o band ocioso enquanto o outro segue no DMA. */
     void sendBuffer() override;

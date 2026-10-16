@@ -186,7 +186,7 @@ uint8_t st7789_drawer::index_for(uint16_t color)
     return 0;
 }
 
-/* [st7789_drawer::init] Sobe o SPI3, dois bands DMA e o panel, depois [backlight_start]. */
+/* [st7789_drawer::init] Sobe o SPI3, dois bands DMA e o panel, zera os índices uma vez, depois [backlight_start]. */
 void st7789_drawer::init()
 {
     spi_bus_config_t buscfg = {};
@@ -212,6 +212,7 @@ void st7789_drawer::init()
         ESP_LOGE(k_tag, "framebuffer alloc failed");
         std::abort();
     }
+    std::memset(pixels, 0, static_cast<size_t>(k_width * k_height));
     clearBuffer();
 
     buscfg.mosi_io_num = k_mosi;
@@ -253,13 +254,9 @@ void st7789_drawer::init()
     ready = 1;
 }
 
-/* [st7789_drawer::clearBuffer] Zera o framebuffer e a palette. */
+/* [st7789_drawer::clearBuffer] Reinicia a palette. Os índices ficam; a cena cobre a View. */
 void st7789_drawer::clearBuffer()
 {
-    if (pixels == nullptr) {
-        return;
-    }
-    std::memset(pixels, 0, static_cast<size_t>(k_width * k_height));
     palette_count = 1;
     palette[0] = 0;
 }

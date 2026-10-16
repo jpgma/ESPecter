@@ -660,6 +660,9 @@ support a decision. Keep links to the detailed agent report.
   2026-10-15   Nidhogg 1 art. NES voices off. Later PCM     architecture.md                  high         A speaker test
                on ES8311
   2026-10-15   Touch and IMU off. Frame budgets open        not brought up                   medium       A sensor experiment
+  2026-10-15   Wall latch, slide cap 256, diagonal 1448.   architecture.md                  medium       The cage feel is retuned
+               Speed above the run cap bleeds by 64.
+               Down releases the latch
 
 ## 7. Research execution plan
 

@@ -66,6 +66,8 @@ Logical resolution equals the panel: 240×240, no upscale. That fits more of a l
 
 The logical buffer is 240×240 8bpp, 57600 bytes, in internal RAM. The engine draws through `DrawSurface` and does not allocate this buffer itself. The ST7789 drawer does, because `DisplayType::CUSTOM` has no TFT sprite. Hot pixels stay out of PSRAM. The static tilemap framebuffer cache stays off. It would duplicate those 57600 bytes.
 
+Each present the engine calls `clearBuffer` before the scene draws. That call resets the palette and does not wipe the 57600 indices. The scene's first draw is a full-view rectangle, so a second write of those bytes would sit on the CPU while the SPI bus is idle. A pixel left untouched keeps its previous index, and after the palette reset that index can name another color. `init` still wipes the indices once, before the panel is shown.
+
 ## Look
 
 Reference is Nidhogg (2014), not Nidhogg 2. Flat colors, chunky silhouettes, a different small palette per level. Do not copy that game's sprites, palettes, or tracks.
@@ -122,25 +124,25 @@ Keyboard placement follows the Q36 face. The Type-C port, LED, reset hole, X/D/V
 
 Derived, for either source:
 
-- D-pad left and right: `move_left` / `move_right`. Opposite directions cancel. `move_up` and `move_down` stay in the snapshot and do not move the body.
+- D-pad left and right: `move_left` / `move_right`. Opposite directions cancel. `move_up` stays in the snapshot and does not move the body. `move_down` does not move the body in open air; while held it releases the wall latch.
 - Left stick past a dead zone: `move_left` / `move_right` as well.
-- South button (`face_a`): `jump` and `confirm`. The body jumps on the rising edge while the floor contact of that tick is set. Holding it does not jump again. Releasing it while rising uses the heavier gravity.
+- South button (`face_a`): `jump` and `confirm`. The body jumps on the rising edge while the floor contact of that tick is set, or while the wall latch is set and the body is off the floor. Holding it does not jump again. Releasing it while rising uses the heavier gravity. `move_down` on that tick releases the latch first, so the edge does not wall-jump, and the edge is still consumed.
 - Menu (`start`): `pause`. B (`face_b`): `cancel`.
 - No key and no controller on PC, or no Pad Emu link on the device: the snapshot stays clear. The body still falls and rests on the bottom edge.
 
 ## Physics
 
-N++ is the movement. The body is a 16×16 kinematic AABB. [game/world.c](game/world.c) integrates one fixed tick: accelerate or friction on x, gravity on y, move x and respond, move y and respond, then a jump impulse. `world_tick` takes no delta. One pixel is 256 subpixels, stored as `int` on the first world row, with velocity and the four border contacts.
+N++ is the movement. The body is a 16×16 kinematic AABB. [game/world.c](game/world.c) integrates one fixed tick: accelerate or friction on x, gravity on y, cap a latched fall, move x and respond, move y and respond, then a jump impulse. `world_tick` takes no delta. One pixel is 256 subpixels, stored as `int` on the first world row, with velocity, the four border contacts, and the wall latch (`-1` left, `1` right, `0` none).
 
 The host turns wall-clock milliseconds into ticks. `Engine::update` passes a whole-millisecond delta. The host adds it to an accumulator and calls `world_tick` once per 16 ms, at most four times per update. A zero delta adds nothing. Time left under 16 ms stays. If four ticks leave 16 ms or more, that remainder is dropped. Sixteen milliseconds is the step this clock can mark, 62.5 Hz, not 1000/60. Present rate does not scale velocity. The number in the corner is presents, not sim ticks.
 
-Feel, per tick: horizontal accel and friction 64 subpixels, max run 768 (3 px, about 188 px/s). Jump impulse −2048. Gravity 128 while rising with jump held, 256 otherwise. Fall caps at 2048, under the body, so a later 16 px tile is not skipped in one tick. A held jump reaches about 64 px. Releasing jump early uses the heavier gravity. These are the first tune for the 240 px cage.
+Feel, per tick: horizontal accel and friction 64 subpixels, max run 768 (3 px, about 188 px/s). Jump impulse −2048. Gravity 128 while rising with jump held, 256 otherwise. Fall caps at 2048, under the body, so a later 16 px tile is not skipped in one tick. A held jump reaches about 64 px. Releasing jump early uses the heavier gravity. While the wall latch holds and the body is falling, vy caps at 256 (1 px), starting the tick after the grab. A wall jump sets vx away from that edge and vy to −1448, the integer of 2048 / sqrt(2). Held, that rise is about 32 px; releasing early is about half. While |vx| is above 768, x input is ignored and vx loses 64 per tick down to the run cap. Only the wall jump produces that speed. This is the cage tune.
 
-The four borders of the view stop the body and zero that axis. No bounce. No wall slide and no wall jump. The floor is the bottom edge, not a drawn tile. D-pad up and down do not move the body. With a clear snapshot the body still falls and rests on the bottom edge.
+The four borders of the view stop the body and zero that axis. No bounce. Crossing the left or right edge sets the wall latch and zeros vx. While the latch holds, left and right do not change vx. The ceiling zeros vy and leaves the latch. The floor clears the latch, so a corner jump is the floor jump. `move_down` held clears the latch, and a clamp on that tick does not set it again. Releasing down does not re-latch until vx crosses that edge. Holding into the wall after the release does that on the following tick. The floor is the bottom edge, not a drawn tile. D-pad up does not move the body. With a clear snapshot the body still falls and rests on the bottom edge.
 
 Tiles are still later: [N Tutorial A](https://www.metanetsoftware.com/2016/n-tutorial-a-collision-detection-and-response), move then respond, horizontal and vertical apart, swept tests so a fast fall does not tunnel. Clamping into the view is exact for these four edges.
 
-Mechanic reference, not code to port: `d:\Repos\refs\school-n--master`. Wall slide and wall jump, square tiles, wedges, and hazards as overlap are still later. Do not take its classes, `std::vector`, per-overlap `new`, variable `deltaTime`, skeleton, or its speed constants.
+Mechanic reference, not code to port: `d:\Repos\refs\school-n--master`. Square tiles, wedges, and hazards as overlap are still later. Do not take its classes, `std::vector`, per-overlap `new`, variable `deltaTime`, skeleton, or its speed constants.
 
 `PIXELROOT32_ENABLE_PHYSICS` stays 0. One collision truth, and it is game code. The ninja is kinematic. SoA rows live in the arena. The next physics slice is solid square tiles plus this body AABB.
 
@@ -172,7 +174,7 @@ The device block comes from `heap_caps_malloc` with `MALLOC_CAP_SPIRAM`, after B
 | Pad reset task stack | internal | 2048 | `pad_link` | Polls BOOT. The reset runs on the NimBLE event queue |
 | Logical buffer | internal | 57600 | ST7789 drawer | 240×240 8bpp. Not a second RGB565 frame |
 | Game arena | PSRAM | 65536 | `arena` | Never freed |
-| `world` slice | arena | 4096 | `world` | SoA. The body keeps subpixel position, velocity, and border contact on the first row |
+| `world` slice | arena | 4096 | `world` | SoA. The body keeps subpixel position, velocity, border contact, and the wall latch on the first row |
 | `level` slice | arena | 32768 | reserved | Empty in this binary |
 | `scratch` slice | arena | 16384 | reserved | Overwritten in place. The offset does not move |
 | Spare | arena | 12288 | `arena` | Growing a slice takes from here and updates this table |
@@ -207,3 +209,5 @@ Boot log, after the engine buffer exists: free internal heap, largest free inter
 | 2026-10-15 | Both targets draw the present rate at the top-right in `FONT_5X7` size 1 |
 | 2026-10-15 | BOOT (GPIO0) terminates the Pad Emu link and scans again. PLUS stays unread |
 | 2026-10-15 | Present uses two 16-row DMA bands so the next band fills while the previous is on the wire |
+| 2026-10-15 | Wall latch on the side edges. Slide cap 256. Wall jump is 1448 on the diagonal. Speed above the run cap bleeds by 64. move_down releases the latch |
+| 2026-10-15 | Per-frame clear resets the palette and leaves the 8bpp indices. The full-view ground is the wipe |
