@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 
 #ifdef PLATFORM_NATIVE
 #include <SDL2/SDL.h>
@@ -28,7 +29,10 @@
 
 #include "driver/gpio.h"
 #include "esp_heap_caps.h"
+#include "esp_image_format.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
 #include "esp_sleep.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -133,10 +137,31 @@ struct view_slot {
     draw_view view;
 };
 
-view_slot g_slot;
-draw_view g_shown;
+#ifdef PLATFORM_NATIVE
+view_slot g_slot_obj;
+draw_view g_shown_obj;
+view_slot *g_slot = &g_slot_obj;
+draw_view *g_shown = &g_shown_obj;
+#else
+view_slot *g_slot;
+draw_view *g_shown;
 
-static_assert(sizeof(view_slot) + sizeof(draw_view) == 8396, "draw snapshot size");
+/* [bind_snapshot] Constrói o seqlock na slice de [arena_snapshot]. */
+void bind_snapshot(void)
+{
+    arena_slice slice;
+
+    slice = arena_snapshot();
+    if (slice.data == nullptr || slice.size < sizeof(view_slot) + sizeof(draw_view)) {
+        std::abort();
+    }
+    g_slot = new (slice.data) view_slot{};
+    g_shown = reinterpret_cast<draw_view *>(slice.data + sizeof(view_slot));
+    std::memset(g_shown, 0, sizeof *g_shown);
+}
+#endif
+
+static_assert(sizeof(view_slot) + sizeof(draw_view) == ARENA_SNAPSHOT_BYTES, "draw snapshot size");
 
 /* [floor_div] Divide a por b para baixo. b é positivo. */
 int floor_div(int a, int b)
@@ -226,18 +251,18 @@ void draw_body(pixelroot32::graphics::Renderer &renderer, int cam_x, int cam_y)
     int oy;
     const uint8_t *px;
 
-    x = g_shown.body_x;
-    y = g_shown.body_y;
-    w = g_shown.body_w;
-    h = g_shown.body_h;
+    x = g_shown->body_x;
+    y = g_shown->body_y;
+    w = g_shown->body_w;
+    h = g_shown->body_h;
     x -= (BODY_SHEET_W - w) / 2;
     y -= BODY_SHEET_H - h;
     if (!box_hits_view(cam_x, cam_y, x, y, BODY_SHEET_W, BODY_SHEET_H)) {
         return;
     }
-    clip = g_shown.clip;
-    frame = g_shown.frame;
-    face = g_shown.face;
+    clip = g_shown->clip;
+    frame = g_shown->frame;
+    face = g_shown->face;
     px = body_sheet_frame(clip, frame);
     if (px == nullptr) {
         return;
@@ -355,12 +380,12 @@ void publish_view(void)
     int i;
     uint32_t seq;
 
-    seq = g_slot.seq.load(std::memory_order_relaxed);
-    g_slot.seq.store(seq + 1u, std::memory_order_relaxed);
+    seq = g_slot->seq.load(std::memory_order_relaxed);
+    g_slot->seq.store(seq + 1u, std::memory_order_relaxed);
     std::atomic_thread_fence(std::memory_order_release);
-    world_camera(&g_slot.view.cam_x, &g_slot.view.cam_y);
-    world_rect(&g_slot.view.body_x, &g_slot.view.body_y, &g_slot.view.body_w, &g_slot.view.body_h);
-    world_body_pose(&g_slot.view.clip, &g_slot.view.frame, &g_slot.view.face);
+    world_camera(&g_slot->view.cam_x, &g_slot->view.cam_y);
+    world_rect(&g_slot->view.body_x, &g_slot->view.body_y, &g_slot->view.body_w, &g_slot->view.body_h);
+    world_body_pose(&g_slot->view.clip, &g_slot->view.frame, &g_slot->view.face);
     count = world_solid_count();
     if (count < 0) {
         count = 0;
@@ -368,25 +393,25 @@ void publish_view(void)
     if (count > WORLD_SOLID_CAP) {
         count = WORLD_SOLID_CAP;
     }
-    g_slot.view.solid_count = count;
+    g_slot->view.solid_count = count;
     for (i = 0; i < count; i++) {
-        world_solid_rect(i, &g_slot.view.solids[i].x, &g_slot.view.solids[i].y, &g_slot.view.solids[i].w,
-                         &g_slot.view.solids[i].h);
+        world_solid_rect(i, &g_slot->view.solids[i].x, &g_slot->view.solids[i].y, &g_slot->view.solids[i].w,
+                         &g_slot->view.solids[i].h);
     }
-    world_spike_rect(&g_slot.view.spike.x, &g_slot.view.spike.y, &g_slot.view.spike.w, &g_slot.view.spike.h);
-    world_checkpoint_rect(&g_slot.view.checkpoint.x, &g_slot.view.checkpoint.y, &g_slot.view.checkpoint.w,
-                          &g_slot.view.checkpoint.h);
-    world_exit_rect(&g_slot.view.exit_box.x, &g_slot.view.exit_box.y, &g_slot.view.exit_box.w, &g_slot.view.exit_box.h);
-    g_slot.view.debug = g_debug;
+    world_spike_rect(&g_slot->view.spike.x, &g_slot->view.spike.y, &g_slot->view.spike.w, &g_slot->view.spike.h);
+    world_checkpoint_rect(&g_slot->view.checkpoint.x, &g_slot->view.checkpoint.y, &g_slot->view.checkpoint.w,
+                          &g_slot->view.checkpoint.h);
+    world_exit_rect(&g_slot->view.exit_box.x, &g_slot->view.exit_box.y, &g_slot->view.exit_box.w, &g_slot->view.exit_box.h);
+    g_slot->view.debug = g_debug;
 #ifndef PLATFORM_NATIVE
-    g_slot.view.ground = link_ground();
-    g_slot.view.battery_pct = battery_percent();
+    g_slot->view.ground = link_ground();
+    g_slot->view.battery_pct = battery_percent();
 #else
-    g_slot.view.ground = 0;
-    g_slot.view.battery_pct = -1;
+    g_slot->view.ground = 0;
+    g_slot->view.battery_pct = -1;
 #endif
     std::atomic_thread_fence(std::memory_order_release);
-    g_slot.seq.store(seq + 2u, std::memory_order_relaxed);
+    g_slot->seq.store(seq + 2u, std::memory_order_relaxed);
 }
 
 /* [load_view] Copia o slot estável para a view do present. Repete se o seq mudar. */
@@ -395,14 +420,14 @@ void load_view(void)
     for (;;) {
         uint32_t seq;
 
-        seq = g_slot.seq.load(std::memory_order_relaxed);
+        seq = g_slot->seq.load(std::memory_order_relaxed);
         if (seq & 1u) {
             continue;
         }
         std::atomic_thread_fence(std::memory_order_acquire);
-        std::memcpy(&g_shown, &g_slot.view, sizeof g_shown);
+        std::memcpy(g_shown, &g_slot->view, sizeof *g_shown);
         std::atomic_thread_fence(std::memory_order_acquire);
-        if (seq == g_slot.seq.load(std::memory_order_relaxed)) {
+        if (seq == g_slot->seq.load(std::memory_order_relaxed)) {
             return;
         }
     }
@@ -485,48 +510,48 @@ public:
             return;
         }
 #endif
-        cam_x = g_shown.cam_x;
-        cam_y = g_shown.cam_y;
+        cam_x = g_shown->cam_x;
+        cam_y = g_shown->cam_y;
         renderer.setOffsetBypass(true);
 #ifdef PLATFORM_NATIVE
         renderer.drawFilledRectangle(0, 0, WORLD_VIEW, WORLD_VIEW, pixelroot32::graphics::Color::DarkGreen);
 #else
-        renderer.drawFilledRectangleW(0, 0, WORLD_VIEW, WORLD_VIEW, g_shown.ground);
+        renderer.drawFilledRectangleW(0, 0, WORLD_VIEW, WORLD_VIEW, g_shown->ground);
 #endif
         renderer.setOffsetBypass(false);
         renderer.setDisplayOffset(-cam_x, -cam_y);
-        count = g_shown.solid_count;
+        count = g_shown->solid_count;
         for (i = 0; i < count; i++) {
             int sx;
             int sy;
             int sw;
             int sh;
 
-            sx = g_shown.solids[i].x;
-            sy = g_shown.solids[i].y;
-            sw = g_shown.solids[i].w;
-            sh = g_shown.solids[i].h;
+            sx = g_shown->solids[i].x;
+            sy = g_shown->solids[i].y;
+            sw = g_shown->solids[i].w;
+            sh = g_shown->solids[i].h;
             if (clip_view(cam_x, cam_y, &sx, &sy, &sw, &sh)) {
                 renderer.drawFilledRectangle(sx, sy, sw, sh, pixelroot32::graphics::Color::Black);
             }
         }
-        mx = g_shown.spike.x;
-        my = g_shown.spike.y;
-        mw = g_shown.spike.w;
-        mh = g_shown.spike.h;
+        mx = g_shown->spike.x;
+        my = g_shown->spike.y;
+        mw = g_shown->spike.w;
+        mh = g_shown->spike.h;
         draw_world_fill(renderer, cam_x, cam_y, mx, my, mw, mh, g_hazard_rgb);
-        mx = g_shown.checkpoint.x;
-        my = g_shown.checkpoint.y;
-        mw = g_shown.checkpoint.w;
-        mh = g_shown.checkpoint.h;
+        mx = g_shown->checkpoint.x;
+        my = g_shown->checkpoint.y;
+        mw = g_shown->checkpoint.w;
+        mh = g_shown->checkpoint.h;
         draw_world_outline(renderer, cam_x, cam_y, mx, my, mw, mh);
-        mx = g_shown.exit_box.x;
-        my = g_shown.exit_box.y;
-        mw = g_shown.exit_box.w;
-        mh = g_shown.exit_box.h;
+        mx = g_shown->exit_box.x;
+        my = g_shown->exit_box.y;
+        mw = g_shown->exit_box.w;
+        mh = g_shown->exit_box.h;
         draw_world_outline(renderer, cam_x, cam_y, mx, my, mw, mh);
         draw_body(renderer, cam_x, cam_y);
-        if (g_shown.debug) {
+        if (g_shown->debug) {
             int x0;
             int y0;
             int x1;
@@ -546,12 +571,12 @@ public:
             }
         }
         renderer.setOffsetBypass(true);
-        if (!g_shown.debug) {
+        if (!g_shown->debug) {
             return;
         }
 #ifndef PLATFORM_NATIVE
         {
-            const int pct = g_shown.battery_pct;
+            const int pct = g_shown->battery_pct;
 
             if (pct >= 0) {
                 char label[16];
@@ -579,27 +604,96 @@ public:
 
 rect_scene g_scene;
 
-/* [log_memory] Imprime [arena_capacity] e [arena_offset] e, no device, o heap livre. */
-void log_memory(void)
+/* [log_bytes] Imprime o nome e os bytes. */
+void log_bytes(const char *name, size_t bytes)
 {
 #ifdef PLATFORM_NATIVE
-    std::printf("arena capacity %u offset %u\n",
-                (unsigned)arena_capacity(),
-                (unsigned)arena_offset());
+    std::printf("%s %u\n", name, (unsigned)bytes);
 #else
-    ESP_LOGI("especter", "arena capacity %u offset %u",
-             (unsigned)arena_capacity(),
-             (unsigned)arena_offset());
-    ESP_LOGI("especter", "internal free %u largest %u psram free %u",
+    ESP_LOGI("especter", "%s %u", name, (unsigned)bytes);
+#endif
+}
+
+/* [sheet_bytes] Soma os quadros de [body_sheet_frames]. */
+size_t sheet_bytes(void)
+{
+    int clip;
+    int frames;
+
+    frames = 0;
+    for (clip = 0; clip < BODY_CLIP_COUNT; clip++) {
+        frames += body_sheet_frames(clip);
+    }
+    return static_cast<size_t>(frames) * static_cast<size_t>(BODY_SHEET_W) * static_cast<size_t>(BODY_SHEET_H);
+}
+
+/* [log_memory] Imprime cada slice das arenas e, no device, o heap interno, a PSRAM e o app na flash. */
+void log_memory(void)
+{
+    log_bytes("psram arena", arena_capacity());
+    log_bytes("psram world", arena_world().size);
+    log_bytes("psram level", arena_level().size);
+    log_bytes("psram scratch", arena_scratch().size);
+    log_bytes("psram spare", arena_capacity() - arena_offset());
+    log_bytes("palette", sizeof palette_rgb565);
+    log_bytes("body", sheet_bytes());
+#ifndef PLATFORM_NATIVE
+    log_bytes("internal arena", arena_internal_capacity());
+    log_bytes("internal bands", arena_bands().size);
+    log_bytes("internal pixels", arena_pixels().size);
+    log_bytes("internal snapshot", arena_snapshot().size);
+    log_bytes("internal sim", arena_stack_sim().size);
+    log_bytes("internal present", arena_stack_present().size);
+    log_bytes("internal backlight", arena_stack_backlight().size);
+    log_bytes("internal pad", arena_stack_pad().size);
+    log_bytes("internal tcb sim", arena_tcb_sim().size);
+    log_bytes("internal tcb present", arena_tcb_present().size);
+    log_bytes("internal tcb backlight", arena_tcb_backlight().size);
+    log_bytes("internal tcb pad", arena_tcb_pad().size);
+    log_bytes("internal engine", arena_engine().size);
+    log_bytes("internal drawer", arena_drawer().size);
+    size_t carved = arena_bands().size + arena_pixels().size + arena_snapshot().size + arena_stack_sim().size
+        + arena_stack_present().size + arena_stack_backlight().size + arena_stack_pad().size
+        + arena_tcb_sim().size + arena_tcb_present().size + arena_tcb_backlight().size + arena_tcb_pad().size
+        + arena_engine().size + arena_drawer().size;
+    if (arena_internal_offset() > carved) {
+        log_bytes("internal align", arena_internal_offset() - carved);
+    }
+    log_bytes("internal spare", arena_internal_capacity() - arena_internal_offset());
+    ESP_LOGI("especter", "internal heap total %u free %u largest %u",
+             (unsigned)heap_caps_get_total_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    ESP_LOGI("especter", "psram heap total %u free %u",
+             (unsigned)heap_caps_get_total_size(MALLOC_CAP_SPIRAM),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    {
+        const esp_partition_t *part = esp_ota_get_running_partition();
+        esp_partition_pos_t pos = {};
+        esp_image_metadata_t image = {};
+
+        if (part != nullptr) {
+            pos.offset = part->address;
+            pos.size = part->size;
+            if (esp_image_get_metadata(&pos, &image) == ESP_OK) {
+                ESP_LOGI("especter", "flash app %u partition %u",
+                         (unsigned)image.image_len,
+                         (unsigned)part->size);
+            }
+        }
+    }
 #endif
 }
 
 #ifndef PLATFORM_NATIVE
-constexpr uint32_t k_sim_stack = 3072;
-constexpr uint32_t k_present_stack = 4096;
+static_assert(sizeof(especter::st7789_drawer) <= ARENA_DRAWER_BYTES, "drawer slice");
+static_assert(alignof(especter::st7789_drawer) <= 16u, "drawer align");
+static_assert(sizeof(pixelroot32::core::Engine) <= ARENA_ENGINE_BYTES, "engine slice");
+static_assert(alignof(pixelroot32::core::Engine) <= 16u, "engine align");
+static_assert(sizeof(StaticTask_t) <= ARENA_TCB_BYTES, "tcb slice");
+static_assert(alignof(StaticTask_t) <= 16u, "tcb align");
+static_assert(alignof(view_slot) <= 16u, "snapshot align");
+
 constexpr UBaseType_t k_task_prio = 2;
 constexpr uint64_t k_dark_us = 30000000ULL;
 
@@ -691,11 +785,25 @@ void sim_task(void *arg)
     }
 }
 
-/* [present_task] No core 1, constrói o Engine e chama Engine::run enquanto [st7789_lit] estiver aceso. */
+/* [present_task] No core 1, constrói o drawer na slice de [arena_drawer] e o Engine na slice de [arena_engine], e chama Engine::run enquanto [st7789_lit] estiver aceso. */
 void present_task(void *arg)
 {
     unsigned long prev;
-    auto *drawer = new especter::st7789_drawer();
+    arena_slice drawer_slice;
+    arena_slice engine_slice;
+    especter::st7789_drawer *drawer;
+    pixelroot32::core::Engine *engine;
+
+    (void)arg;
+    drawer_slice = arena_drawer();
+    engine_slice = arena_engine();
+    if (drawer_slice.data == nullptr || engine_slice.data == nullptr
+        || drawer_slice.size < sizeof(especter::st7789_drawer)
+        || engine_slice.size < sizeof(pixelroot32::core::Engine)) {
+        ESP_LOGE("especter", "engine slice failed");
+        std::abort();
+    }
+    drawer = new (drawer_slice.data) especter::st7789_drawer();
     pixelroot32::graphics::DisplayConfig config(
         pixelroot32::graphics::DisplayType::CUSTOM,
         0,
@@ -706,13 +814,11 @@ void present_task(void *arg)
         0,
         0,
         drawer);
-    pixelroot32::core::Engine engine(config);
-
-    (void)arg;
+    engine = new (engine_slice.data) pixelroot32::core::Engine(config);
     especter::st7789_bind_present(xTaskGetCurrentTaskHandle());
-    engine.init();
+    engine->init();
     log_memory();
-    engine.setScene(&g_scene);
+    engine->setScene(&g_scene);
     prev = millis();
     for (;;) {
         unsigned long now;
@@ -729,16 +835,19 @@ void present_task(void *arg)
         if (delta > 0) {
             note_frame(delta);
         }
-        engine.run();
+        engine->run();
     }
 }
 #endif
 
 } // namespace
 
-/* [engine_host_run] Sobe a Scene depois de [world_init]. No PC entra no laço do Engine. No device publica a view e prende o sim no core 0 e o present no core 1. */
+/* [engine_host_run] Sobe a Scene depois de [world_init]. No PC entra no laço do Engine. No device monta o snapshot, publica a view e prende o sim no core 0 e o present no core 1. */
 extern "C" void engine_host_run(void)
 {
+#ifndef PLATFORM_NATIVE
+    bind_snapshot();
+#endif
     if (world_init() != 0) {
         std::fprintf(stderr, "world_init failed\n");
         std::abort();
@@ -767,13 +876,36 @@ extern "C" void engine_host_run(void)
     dark_args.callback = dark_timer_cb;
     dark_args.name = "dark";
     ESP_ERROR_CHECK(esp_timer_create(&dark_args, &g_dark_timer));
-    if (xTaskCreatePinnedToCore(sim_task, "sim", k_sim_stack, nullptr, k_task_prio, &g_sim, 0) != pdPASS) {
-        ESP_LOGE("especter", "sim task failed");
-        std::abort();
-    }
-    if (xTaskCreatePinnedToCore(present_task, "present", k_present_stack, nullptr, k_task_prio, nullptr, 1) != pdPASS) {
-        ESP_LOGE("especter", "present task failed");
-        std::abort();
+    {
+        arena_slice sim_stack = arena_stack_sim();
+        arena_slice sim_tcb = arena_tcb_sim();
+        arena_slice present_stack = arena_stack_present();
+        arena_slice present_tcb = arena_tcb_present();
+        TaskHandle_t sim;
+        TaskHandle_t present;
+
+        sim = nullptr;
+        present = nullptr;
+        if (sim_stack.data != nullptr && sim_tcb.data != nullptr) {
+            sim = xTaskCreateStaticPinnedToCore(sim_task, "sim", static_cast<uint32_t>(sim_stack.size), nullptr,
+                                                k_task_prio, reinterpret_cast<StackType_t *>(sim_stack.data),
+                                                reinterpret_cast<StaticTask_t *>(sim_tcb.data), 0);
+        }
+        if (present_stack.data != nullptr && present_tcb.data != nullptr) {
+            present = xTaskCreateStaticPinnedToCore(present_task, "present", static_cast<uint32_t>(present_stack.size),
+                                                    nullptr, k_task_prio,
+                                                    reinterpret_cast<StackType_t *>(present_stack.data),
+                                                    reinterpret_cast<StaticTask_t *>(present_tcb.data), 1);
+        }
+        if (sim == nullptr) {
+            ESP_LOGE("especter", "sim task failed");
+            std::abort();
+        }
+        if (present == nullptr) {
+            ESP_LOGE("especter", "present task failed");
+            std::abort();
+        }
+        g_sim = sim;
     }
 #endif
 }

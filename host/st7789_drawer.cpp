@@ -1,11 +1,11 @@
 #include "st7789_drawer.h"
 
+#include "arena.h"
 #include "palette.h"
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/spi_master.h"
-#include "esp_heap_caps.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
@@ -40,11 +40,13 @@ constexpr int k_bl_hz = 5000;
 constexpr uint32_t k_bl_duty_max = 1023;
 constexpr int k_bl_fade_ms = 420;
 constexpr int k_bl_scan_ms = 20;
-constexpr uint32_t k_bl_stack = 3072;
 
 const char *k_tag = "st7789";
-uint16_t *g_bands;
-uint8_t *g_pixels;
+
+static_assert(static_cast<size_t>(k_band_pixels) * 2u * sizeof(uint16_t) == ARENA_BANDS_BYTES, "band bytes");
+static_assert(static_cast<size_t>(k_width) * static_cast<size_t>(k_height) == ARENA_PIXELS_BYTES, "pixel bytes");
+static_assert(sizeof(StaticTask_t) <= ARENA_TCB_BYTES, "tcb slice");
+static_assert(alignof(StaticTask_t) <= 16u, "tcb align");
 esp_lcd_panel_handle_t g_lcd;
 int g_bl_on = 1;
 int g_bl_armed;
@@ -171,7 +173,7 @@ void panel_pins_hold(int hold)
     }
 }
 
-/* [backlight_start] Configura o LEDC no GPIO46, registra [fade_end], acende com [backlight_fade] e sobe [backlight_task]. */
+/* [backlight_start] Configura o LEDC no GPIO46, registra [fade_end], acende com [backlight_fade] e sobe [backlight_task] na slice de [arena_stack_backlight]. */
 void backlight_start(void)
 {
     ledc_timer_config_t timer = {};
@@ -202,8 +204,16 @@ void backlight_start(void)
     ESP_ERROR_CHECK(ledc_cb_register(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, &cbs, nullptr));
     backlight_fade(1);
     ESP_ERROR_CHECK(gpio_config(&key));
-    if (xTaskCreate(backlight_task, "bl", k_bl_stack, nullptr, 1, nullptr) != pdPASS) {
-        ESP_LOGE(k_tag, "backlight task failed");
+    {
+        arena_slice stack = arena_stack_backlight();
+        arena_slice tcb = arena_tcb_backlight();
+
+        if (stack.data == nullptr || tcb.data == nullptr
+            || xTaskCreateStatic(backlight_task, "bl", static_cast<uint32_t>(stack.size), nullptr, 1,
+                                 reinterpret_cast<StackType_t *>(stack.data),
+                                 reinterpret_cast<StaticTask_t *>(tcb.data)) == nullptr) {
+            ESP_LOGE(k_tag, "backlight task failed");
+        }
     }
 }
 
@@ -229,18 +239,6 @@ bool spi_done_cb(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data
 }
 
 } // namespace
-
-/* [st7789_alloc_bands] Reserva os bands DMA e os índices 8bpp antes do NimBLE. Aborta se o heap interno não servir. */
-extern "C" void st7789_alloc_bands(void)
-{
-    g_bands = static_cast<uint16_t *>(heap_caps_malloc(static_cast<size_t>(k_band_pixels) * 2u * sizeof(uint16_t),
-                                                       MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
-    g_pixels = static_cast<uint8_t *>(heap_caps_malloc(static_cast<size_t>(k_width * k_height), MALLOC_CAP_INTERNAL));
-    if (g_bands == nullptr || g_pixels == nullptr) {
-        ESP_LOGE(k_tag, "band alloc failed");
-        std::abort();
-    }
-}
 
 namespace especter {
 
@@ -326,7 +324,7 @@ void st7789_pwr_ready(void)
     ESP_ERROR_CHECK(gpio_config(&key));
 }
 
-/* [st7789_drawer] Deixa o panel fechado. [st7789_alloc_bands] reserva o framebuffer. */
+/* [st7789_drawer] Deixa o panel fechado. [st7789_drawer::init] usa as slices de [arena_bands] e [arena_pixels]. */
 st7789_drawer::st7789_drawer()
     : pixels(nullptr), band(nullptr), ready(0), panel(nullptr), panel_io(nullptr), spi_done(nullptr)
 {
@@ -350,7 +348,7 @@ uint8_t st7789_drawer::index_for(uint16_t color)
     return 0;
 }
 
-/* [st7789_drawer::init] Sobe o SPI3 e o panel com os buffers de [st7789_alloc_bands], zera os índices uma vez, depois [backlight_start]. */
+/* [st7789_drawer::init] Sobe o SPI3 e o panel com as slices de [arena_bands] e [arena_pixels], zera os índices uma vez, depois [backlight_start]. */
 void st7789_drawer::init()
 {
     spi_bus_config_t buscfg = {};
@@ -370,12 +368,16 @@ void st7789_drawer::init()
     physicalWidth = k_width;
     physicalHeight = k_height;
 
-    if (g_pixels == nullptr || g_bands == nullptr) {
+    arena_slice pixel_slice = arena_pixels();
+    arena_slice band_slice = arena_bands();
+
+    if (pixel_slice.data == nullptr || band_slice.data == nullptr || pixel_slice.size < ARENA_PIXELS_BYTES
+        || band_slice.size < ARENA_BANDS_BYTES) {
         ESP_LOGE(k_tag, "framebuffer alloc failed");
         std::abort();
     }
-    pixels = g_pixels;
-    band = g_bands;
+    pixels = pixel_slice.data;
+    band = reinterpret_cast<uint16_t *>(band_slice.data);
     std::memset(pixels, 0, static_cast<size_t>(k_width * k_height));
     clearBuffer();
 

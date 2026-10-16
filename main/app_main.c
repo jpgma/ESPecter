@@ -26,15 +26,20 @@ static void nvs_start(void)
     ESP_ERROR_CHECK(err);
 }
 
-/* [app_main] Liga o BAT_EN e então [battery_start], [st7789_alloc_bands], [nvs_start], [pad_link_start], [arena_init] e [engine_host_run]. */
+/* [app_main] Liga o BAT_EN e então [arena_internal_init], [battery_start], [nvs_start], [pad_link_start], [arena_init] e [engine_host_run]. */
 void app_main(void)
 {
+    void *internal;
     void *block;
 
     gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT);
     gpio_set_level(GPIO_NUM_2, 1);
+    internal = heap_caps_malloc(ARENA_INTERNAL_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (internal == NULL || arena_internal_init(internal, ARENA_INTERNAL_BYTES) != 0) {
+        ESP_LOGE(TAG, "internal arena init failed");
+        abort();
+    }
     battery_start();
-    st7789_alloc_bands();
 
     nvs_start();
     pad_link_start();

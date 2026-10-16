@@ -49,7 +49,7 @@ The PC build defines `PLATFORM_NATIVE` and uses the engine's SDL2 drawer. It doe
 
 - Panel: write-only ST7789, 240×240 visible, RGB565, SPI mode 3 at 80 MHz. GPIO21 CS, GPIO38 CLK, GPIO39 MOSI, GPIO45 DC, GPIO40 RST, GPIO46 backlight. GPIO45 and GPIO46 are strapping pins. They are configured only after boot. No MISO. No TE. Tearing is a hardware fact. Dirty rectangles are the later mitigation.
 - Backlight is LEDC low-speed channel 0 on GPIO46: 5 kHz, 10-bit. Duty starts at 0. The drawer fades it on after the panel is up. A full swing is requested at 420 ms. At 5 kHz the fade hardware holds each duty step for 2 cycles, so the glass takes about 410 ms. A reverse mid-fade keeps that duty per millisecond. PWR (GPIO5) is active low with an internal pull-up. The scan ignores it until the pin has been seen released, then toggles after two pressed samples 20 ms apart.
-- One full RGB565 frame is 115200 bytes and about 12.3 ms on the wire. The drawer presents 1:1 through two 120-row DMA bands, which together are that frame. The idle band fills while the other is on the wire. `app_main` reserves the pair and the 57600-byte 8bpp buffer before the NimBLE central, while the 265 KiB internal hole is still one block. After the central the largest hole is smaller than that buffer. A second copy is not reserved. A band is 57600 bytes, so each color transfer is split at the 32768-byte DMA cap under one RAMWR.
+- One full RGB565 frame is 115200 bytes and about 12.3 ms on the wire. The drawer presents 1:1 through two 120-row DMA bands, which together are that frame. The idle band fills while the other is on the wire. `app_main` takes one internal arena before the NimBLE central, while the 265 KiB internal hole is still one block. The pair and the 57600-byte 8bpp buffer are the first two slices of that block. After the central the leftover heap is smaller than that buffer. A second copy is not reserved. A band is 57600 bytes, so each color transfer is split at the 32768-byte DMA cap under one RAMWR.
 - Internal SRAM is 512 KB. DMA and the BLE controller live here. PSRAM cannot hold them.
 - PSRAM is 8 MB octal. The game arena is one 64 KB block here. The rest stays free so a stray heap allocation is visible.
 - Flash is 16 MB quad, not OPI. `sdkconfig.defaults` sets that.
@@ -65,7 +65,7 @@ The PC build defines `PLATFORM_NATIVE` and uses the engine's SDL2 drawer. It doe
 
 Logical resolution equals the panel: 240×240, no upscale. That fits more of a level on the square glass. The wire cost of a full present stays about 12.3 ms, because the panel always receives 240×240 RGB565. Present ships that frame as two 120-row windows. The S3 DMA length cap is 32768 bytes, so each window's pixels are two transactions under one address setup.
 
-The logical buffer is 240×240 8bpp, 57600 bytes, in internal RAM. The engine draws through `DrawSurface` and does not allocate this buffer itself. `st7789_alloc_bands` does, in the same call as the DMA bands, because `DisplayType::CUSTOM` has no TFT sprite. Hot pixels stay out of PSRAM. The static tilemap framebuffer cache stays off. It would duplicate those 57600 bytes.
+The logical buffer is 240×240 8bpp, 57600 bytes, a slice of the internal arena. The engine draws through `DrawSurface` and does not allocate this buffer itself. The drawer reads that slice, because `DisplayType::CUSTOM` has no TFT sprite. Hot pixels stay out of PSRAM. The static tilemap framebuffer cache stays off. It would duplicate those 57600 bytes.
 
 Each present the engine calls `clearBuffer` before the scene draws. That call does not wipe the 57600 indices, and it does not rebuild the palette. The palette is the fixed 256-entry table in `palette_rgb565`, so an index keeps its color. The scene's first draw is a full-view rectangle, so a second write of those bytes would sit on the CPU while the SPI bus is idle. A pixel left untouched keeps its previous index and the same color. `init` still wipes the indices once, before the panel is shown.
 
@@ -166,43 +166,50 @@ Three stores:
 
 | Store | Size | What stays there |
 | --- | ---: | --- |
-| Internal SRAM | 512 KB | BLE controller and host, FreeRTOS stacks, DMA present band, logical 8bpp buffer |
+| Internal SRAM | 512 KB | The internal arena, then the leftover heap for BLE and the other IDF residents |
 | PSRAM | 8 MB octal | The game arena, and nothing else from this binary |
 | Flash | 16 MB quad | Code, read-only data, later PCM |
 
 Who may allocate:
 
-- ESP-IDF and PixelRoot32 allocate their own residents from the heap. Those blocks are not inside the game arena.
-- Game code allocates only through `arena`. There is no `arena_free`. The block is taken once at boot and never returned. There is no rewind. Per-frame work overwrites the scratch slice in place.
+- The device has two arenas. `app_main` takes the internal block with `MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL` before the ADC, NVS, and the NimBLE central, then the PSRAM block after the central. Neither block is freed. There is no `arena_free`. There is no rewind. Per-frame work overwrites the scratch slice in place.
+- Game code allocates only through the PSRAM arena.
+- The internal arena holds the DMA bands, the 8bpp buffer, the draw snapshot, the sim, present, backlight, and pad-reset stacks, their four `StaticTask_t` blocks, the `Engine`, and the drawer. The present task placement-news the `Engine` and the drawer into those slices and does not destroy the `Engine`. `operator delete` on the drawer does not return those bytes to the heap.
+- ESP-IDF still allocates from the leftover internal heap: the NimBLE controller, host pools, and host task, NVS, the ADC unit, SPI DMA descriptors, the `esp_lcd` panel, the counting semaphore in the drawer, the dark `esp_timer`, the pad-link semaphore created on the first light sleep, and the FreeRTOS idle and timer stacks.
 
-`arena` is a base, a capacity, and an offset. A slice bumps that offset, aligned to 8 bytes. If the offset would pass the capacity, boot fails.
+`arena` is a base, a capacity, and an offset. A slice bumps that offset. PSRAM slices align to 8 bytes. Internal slices align to 16 bytes, which the task stacks require. Bands are the first internal slice, on the DMA-capable pointer. If the offset would pass the capacity, boot fails.
 
-The device block comes from `heap_caps_malloc` with `MALLOC_CAP_SPIRAM`, after BLE is up. The PC build uses one `malloc` of the same size, also never freed. Same carve order on both.
+The PC build uses one `malloc` of the PSRAM size, also never freed, and the same PSRAM carve. It does not take the internal block. Its `Engine` stays on the stack, and its draw snapshot stays in static storage.
 
 | Resident | Where | Bytes | Owner | Notes |
 | --- | --- | ---: | --- | --- |
-| BLE controller and host | internal | unmeasured | ESP-IDF | NimBLE, internal pools. Fill from the first boot log |
-| FreeRTOS stacks, including the BT host task | internal | unmeasured | ESP-IDF | |
-| Present band | internal, DMA | 115200 | ST7789 drawer | Two 120-row bands of 240 RGB565, one frame. Reserved in `app_main` before the central. The idle band fills during the other's DMA |
-| Backlight task stack | internal | 3072 | ST7789 drawer | Polls PWR. The fade itself is LEDC hardware |
-| Pad reset task stack | internal | 2048 | `pad_link` | Polls BOOT and PLUS. A double BOOT runs on the NimBLE event queue. A single BOOT is a mailbox the host reads |
-| Sim task stack | internal | 3072 | host | Core 0, priority 2. The 16 ms clock lives here |
-| Present task stack | internal | 4096 | host | Core 1, priority 2. Owns the Engine and the drawer |
-| Draw snapshot | internal | 8392 | host | Two copies of the draw view, 256 AABB slots. Seqlock. Not the arena |
-| Logical buffer | internal | 57600 | ST7789 drawer | 240×240 8bpp. Reserved in `app_main` with the bands, before the central. Not a second RGB565 frame |
+| BLE controller and host | internal heap | unmeasured | ESP-IDF | NimBLE, internal pools. Fill from the first boot log |
+| FreeRTOS idle and timer stacks, including the BT host task | internal heap | unmeasured | ESP-IDF | |
+| Internal arena | internal, DMA | 208896 | `arena` | One block, taken before the central. Never freed |
+| Present band | internal arena | 115200 | ST7789 drawer | Two 120-row bands of 240 RGB565, one frame. First slice. The idle band fills during the other's DMA |
+| Logical buffer | internal arena | 57600 | ST7789 drawer | 240×240 8bpp. Not a second RGB565 frame |
+| Draw snapshot | internal arena | 8396 | host | Two copies of the draw view, 256 AABB slots. Seqlock, constructed in the slice |
+| Sim task stack | internal arena | 3072 | host | Core 0, priority 2. The 16 ms clock lives here |
+| Present task stack | internal arena | 4096 | host | Core 1, priority 2. Runs the Engine that lives in the engine slice |
+| Backlight task stack | internal arena | 3072 | ST7789 drawer | Polls PWR. The fade itself is LEDC hardware |
+| Pad reset task stack | internal arena | 2048 | `pad_link` | Polls BOOT and PLUS. A double BOOT runs on the NimBLE event queue. A single BOOT is a mailbox the host reads |
+| Task TCBs | internal arena | 1408 | host, drawer, `pad_link` | Four slices of 352. `sizeof(StaticTask_t)` is 340 on this IDF |
+| `Engine` | internal arena | 4096 | host | Placement-new on the present task. The task does not destroy it |
+| Drawer | internal arena | 256 | host | Placement-new on the present task. `operator delete` is a no-op |
+| Internal spare | internal arena | 9648 | `arena` | Tail after the drawer. 4 bytes of alignment sit between the snapshot and the sim stack. Growing a slice takes from here and updates this table |
 | Body sheet | flash | 9984 | `body_sheet` | 39 frames, 8bpp indices, 16×16. Index 0 is skip |
 | Palette | flash | 512 | `palette` | 256 RGB565 entries. The ST7789 drawer reads this table |
 | Game arena | PSRAM | 65536 | `arena` | Never freed |
-| `world` slice | arena | 4096 | `world` | SoA. The body keeps a cell index, local subpixel position, velocity, face contact, the wall latch, and the pose (face, clip, frame, and hold) on the first row. The camera origin, its velocity, the held ground line, life, the death hold, and the checkpoint stand sit after the rows |
-| `level` slice | arena | 32768 | `world` | SoA of up to 256 static AABBs, 6144 bytes. Ten are used |
-| `scratch` slice | arena | 16384 | reserved | Overwritten in place. The offset does not move |
-| Spare | arena | 12288 | `arena` | Growing a slice takes from here and updates this table |
+| `world` slice | PSRAM arena | 4096 | `world` | SoA. The body keeps a cell index, local subpixel position, velocity, face contact, the wall latch, and the pose (face, clip, frame, and hold) on the first row. The camera origin, its velocity, the held ground line, life, the death hold, and the checkpoint stand sit after the rows |
+| `level` slice | PSRAM arena | 32768 | `world` | SoA of up to 256 static AABBs, 6144 bytes. Ten are used |
+| `scratch` slice | PSRAM arena | 16384 | reserved | Overwritten in place. The offset does not move |
+| Spare | PSRAM arena | 12288 | `arena` | Growing a slice takes from here and updates this table |
 
-Boot log, after the engine buffer exists: free internal heap, largest free internal block, free PSRAM, arena capacity, arena offset.
+Boot log, after the engine buffer exists: each slice of both arenas, including spare and any alignment gap, then internal heap total, free, and largest block, PSRAM heap total and free, and the flash app against its partition. Palette and body sheet bytes are in that same log.
 
 ## Runtime
 
-`app_main` drives `BAT_EN` high, opens the VBAT ADC, reserves the present bands and the 8bpp buffer, starts NVS and the NimBLE central, creates the arena, then `engine_host_run`. On the device that call publishes the spawn view and returns. The sim task is pinned to core 0. The present task is pinned to core 1, constructs the Engine, and calls `Engine::run`. That device call paints one frame and does not call `update`. On the PC, `Engine::run` still loops update then present until the window closes, on one thread. The PC `main` creates the arena and calls the same host. Neither target inits I2C, Wi-Fi, the codec, or the IMU.
+`app_main` drives `BAT_EN` high, takes the internal arena, opens the VBAT ADC, starts NVS and the NimBLE central, creates the PSRAM arena, then `engine_host_run`. On the device that call builds the draw snapshot in its slice, publishes the spawn view, and returns. The sim task is pinned to core 0. The present task is pinned to core 1, placement-news the drawer and the Engine into their slices, and calls `Engine::run`. That device call paints one frame and does not call `update`. On the PC, `Engine::run` still loops update then present until the window closes, on one thread. The PC `main` creates the arena and calls the same host. Neither target inits I2C, Wi-Fi, the codec, or the IMU.
 
 The sim publishes a draw snapshot in internal RAM after each advance. Present copies one stable view and draws only that. A torn slot is retried. The sim does not take a lock, and present does not call `world_*`, `pad_link_read`, or `battery_percent`. The link ground and the battery percent ride in the snapshot. The present rate stays on the present task.
 
@@ -250,3 +257,5 @@ The drawer fades the backlight on after the panel is up. PWR fades it off or bac
 | 2026-10-16 | The AABB is 8×12, centered on the 16×16 cell with the feet on the bottom row. Wall slide faces away from the latch |
 | 2026-10-16 | The course is fixed: a wall-jump slot, a 48 px pit, one spike, a checkpoint, and an exit. Death holds 16 ticks, then the last checkpoint. The exit freezes until reset. The LCG is gone |
 | 2026-10-16 | PixelRoot32 1.12.0 (`826be881`) and PixelRoot32-APU v2.0.0 (`b603b3a9`) are vendored source snapshots. Submodules are gone. Upstream history is not imported. Docs, assets, examples, and tests are not copied. The trees may be patched |
+| 2026-10-16 | One 204 KiB internal arena is taken before the ADC, NVS, and NimBLE. It holds the bands, the 8bpp buffer, the draw snapshot, four task stacks and their TCBs, the Engine, and the drawer. NimBLE stays on the leftover internal heap |
+| 2026-10-16 | The boot log lists every arena slice and the internal, PSRAM, and flash parts after the engine buffer exists |

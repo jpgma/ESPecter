@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "arena.h"
+
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -589,10 +591,12 @@ static void boot_task(void *param)
     }
 }
 
-/* [boot_start] Configura o GPIO0 e o GPIO4 e sobe [boot_task]. */
+/* [boot_start] Configura o GPIO0 e o GPIO4 e sobe [boot_task] na slice de [arena_stack_pad]. */
 static void boot_start(void)
 {
     gpio_config_t key = {0};
+    arena_slice stack;
+    arena_slice tcb;
 
     key.pin_bit_mask = (1ull << GPIO_NUM_0) | (1ull << GPIO_NUM_4);
     key.mode = GPIO_MODE_INPUT;
@@ -601,7 +605,11 @@ static void boot_start(void)
     key.intr_type = GPIO_INTR_DISABLE;
     ESP_ERROR_CHECK(gpio_config(&key));
     ble_npl_callout_init(&s_boot, nimble_port_get_dflt_eventq(), boot_cb, NULL);
-    if (xTaskCreate(boot_task, "padboot", 2048, NULL, 1, NULL) != pdPASS) {
+    stack = arena_stack_pad();
+    tcb = arena_tcb_pad();
+    if (stack.data == NULL || tcb.data == NULL
+        || xTaskCreateStatic(boot_task, "padboot", (uint32_t)stack.size, NULL, 1,
+                             (StackType_t *)stack.data, (StaticTask_t *)tcb.data) == NULL) {
         ESP_LOGE(TAG, "boot task failed");
     }
 }

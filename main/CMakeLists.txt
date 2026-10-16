@@ -43,6 +43,9 @@ idf_component_register(
         nvs_flash
         esp_hw_support
         esp_rom
+        app_update
+        bootloader_support
+        esp_partition
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE
