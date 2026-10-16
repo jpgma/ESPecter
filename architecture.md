@@ -56,7 +56,7 @@ The PC build defines `PLATFORM_NATIVE` and uses the engine's SDL2 drawer. It doe
 - `BAT_EN` (GPIO2) is driven high before any blocking call. USB Serial/JTAG dies in deep sleep. There is no I2C fuel gauge. Deep sleep is not used.
 - One I2C bus (GPIO41/42): QMI8658A `0x6B`, CST816D `0x15`, ES8311 `0x18`, ES7210 `0x40`. No second bus. This binary does not init I2C, so those devices stay down until one owner exists. Touch is one finger. The IMU has no magnetometer, so yaw is not observable.
 - PLUS is GPIO4 and BOOT is GPIO0, reserved as a later on-device fallback. PWR (GPIO5) is the power latch, not a game button. A press fades the backlight off or back on.
-- Wi-Fi stays off. Its DMA cannot live in PSRAM, and this game does not need it.
+- Wi-Fi is not started. On IDF 5.5 `ESP_WIFI_ENABLED` has no prompt, so the wifi library stays linked because the BT component requires it. This binary does not call `esp_wifi_init`, so that DMA is not allocated.
 - The speaker and ES8311 exist. PixelRoot32's I2S backend is a bare DAC, not this codec. Audio is not in this binary. See the sound section.
 - CPU is 240 MHz (`CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240`). ESP-IDF is 5.5 or newer. Target `esp32s3`.
 
@@ -78,7 +78,7 @@ Reference is Nidhogg (2014), not Nidhogg 2. Flat colors, chunky silhouettes, a d
 - The view is square. When a camera exists, it leads in the facing direction.
 - The ninja is about 16 pixels tall (about 1.8 mm on this 1.54" panel). The boilerplate rectangle is 16×16. Later animation is idle, run, jump, death. No skeletal animation.
 
-The first scene uses two flat colors: dark green ground and a white figure.
+The figure is white. On the PC the ground is dark green. On the device the ground is the link, the same three flat colors as the pademu status bar: red `(180, 0, 0)` while the central is down, amber `(220, 180, 0)` while it scans, and green once Pad Emu is linked. That green is `(0, 140, 32)`, darker than the pademu bar `(0, 180, 40)`.
 
 ## Sound
 
@@ -88,11 +88,27 @@ Later music and effects are short PCM clips in flash, played through the ES8311.
 
 ## Gamepad
 
-The Q36XDV is not on the board. The chip is BLE only, so Classic HID is not an option. `sdkconfig.defaults` enables Bluedroid, BLE-only. `app_main` raises `BAT_EN`, starts the controller and the host, then the arena, then the scene. It does not connect to the first HID it sees. The pad's switch X name is `Xbox Wireless Controller`. The report map is still unread, so the device writes a clear action snapshot and the rectangle stays still.
+The Q36XDV is not on the board. The chip is BLE only, so Classic HID is not an option. The Q36 report map is still unread. This binary does not connect to the first advertisement it sees.
 
-The PC build does not open a Bluetooth radio and does not link Bluedroid. DS4Windows owns the radio and, in its default profile, exposes an Xbox 360 pad. [pc/actions_ds4.c](pc/actions_ds4.c) is compiled only into the PC target. It reads the keyboard and the first SDL game controller, and ORs them. A virtual DualShock profile is not the one this sim supports. The device links [game/actions.c](game/actions.c), which clears the snapshot and does not read a keyboard.
+The phone stand-in is what the device reads. The app name is Pad Emu. It advertises service `f31a0001-7c4e-4a2b-9e15-6d8f0b2c4a10` and notifies a 3-byte report on `f31a0002-7c4e-4a2b-9e15-6d8f0b2c4a10`: a little-endian `uint16` of buttons, then a hat (`0` up, then clockwise, `8` neutral). [main/pad_link.c](main/pad_link.c) is the NimBLE central. It scans for that service, subscribes to the report, and copies each notify into a static mailbox. A notify also marks the link up, and the 2 s watch leaves that phase alone. [main/actions_pad.c](main/actions_pad.c) calls `pad_link_read` from `actions_capture` and fills the same snapshot the PC keyboard fills. `game/` does not include that reader. While the link is down the mailbox is clear and the rectangle stays centered. A drop clears the mailbox and the central scans again. Advertisements are not duplicate-filtered, so the same phone is seen again. The connection uses a 2 s supervision timeout and a 10 s connect attempt, with no bonding. A host timer every 2 s restarts a scan that died, and abandons a connect or discover that has sat for 8 s. A linked report fills the held fields below. This stand-in has no stick.
 
-[game/actions.h](game/actions.h) is the shared snapshot. The host calls `actions_capture` once per update. Held play buttons are `dpad_up`, `dpad_down`, `dpad_left`, `dpad_right`, `face_y`, `face_x`, `face_a`, `face_b`, `shoulder_l`, `trigger_l2`, `trigger_r2`, `shoulder_r`, `select`, `home`, and `start`. The reader then derives `move_up`, `move_down`, `move_left`, `move_right`, `jump`, `pause`, `confirm`, and `cancel`. The left stick past a dead zone also sets `move_left` / `move_right`. The Q36 has no stick; that axis is only the Xbox stand-in.
+`sdkconfig.defaults` enables NimBLE: central, observer, one connection, GATT client, host pinned to core 0, pool allocations in internal RAM. Bluedroid is off. This binary does not call `esp_wifi_init`. `app_main` raises `BAT_EN`, starts NVS, starts this central, then the arena, then the scene.
+
+The PC build does not open a Bluetooth radio and does not link NimBLE or Bluedroid. DS4Windows owns the radio and, in its default profile, exposes an Xbox 360 pad. [pc/actions_ds4.c](pc/actions_ds4.c) is compiled only into the PC target. It reads the keyboard and the first SDL game controller, and ORs them. A virtual DualShock profile is not the one this sim supports. The device links [main/actions_pad.c](main/actions_pad.c), which reads the Pad Emu mailbox and does not read a keyboard. `game/` only sees the snapshot.
+
+[game/actions.h](game/actions.h) is the shared snapshot. The host calls `actions_capture` once per update. Held play buttons are `dpad_up`, `dpad_down`, `dpad_left`, `dpad_right`, `face_y`, `face_x`, `face_a`, `face_b`, `shoulder_l`, `trigger_l2`, `trigger_r2`, `shoulder_r`, `select`, `home`, and `start`. The reader then derives `move_up`, `move_down`, `move_left`, `move_right`, `jump`, `pause`, `confirm`, and `cancel`. The left stick past a dead zone also sets `move_left` / `move_right`. The Q36 and Pad Emu have no stick; that axis is only the Xbox stand-in.
+
+Pad Emu report, while the link is up:
+
+| Report | Snapshot |
+| --- | --- |
+| Hat north, and the diagonals beside it | `dpad_up` |
+| Hat east, and the diagonals beside it | `dpad_right` |
+| Hat south, and the diagonals beside it | `dpad_down` |
+| Hat west, and the diagonals beside it | `dpad_left` |
+| A, B, X, Y | `face_a` `face_b` `face_x` `face_y` |
+| L, L2, R2, R | `shoulder_l` `trigger_l2` `trigger_r2` `shoulder_r` |
+| View, Home, Menu | `select` `home` `start` |
 
 Keyboard placement follows the Q36 face. The Type-C port, LED, reset hole, X/D/V slide, and Pair are not play buttons, so they have no key.
 
@@ -110,7 +126,7 @@ Derived, for either source:
 - Left stick past a dead zone: `move_left` / `move_right` as well.
 - South button (`face_a`): `jump` and `confirm`. The rectangle steps up while held. D-pad down cancels that step.
 - Menu (`start`): `pause`. B (`face_b`): `cancel`.
-- No key and no controller: the snapshot stays clear and the rectangle stays centered.
+- No key and no controller on PC, or no Pad Emu link on the device: the snapshot stays clear and the rectangle stays centered.
 
 ## Physics
 
@@ -143,7 +159,7 @@ The device block comes from `heap_caps_malloc` with `MALLOC_CAP_SPIRAM`, after B
 
 | Resident | Where | Bytes | Owner | Notes |
 | --- | --- | ---: | --- | --- |
-| BLE controller and host | internal | unmeasured | ESP-IDF | Fill from the first boot log |
+| BLE controller and host | internal | unmeasured | ESP-IDF | NimBLE, internal pools. Fill from the first boot log |
 | FreeRTOS stacks, including the BT host task | internal | unmeasured | ESP-IDF | |
 | Present band | internal, DMA | 7680 | ST7789 drawer | 16 rows of 240 RGB565. One band, reused |
 | Backlight task stack | internal | 3072 | ST7789 drawer | Polls PWR. The fade itself is LEDC hardware |
@@ -158,7 +174,7 @@ Boot log, after the engine buffer exists: free internal heap, largest free inter
 
 ## Runtime
 
-`app_main` drives `BAT_EN` high, starts BLE, creates the arena, then `engine_host_run`. The drawer fades the backlight on after the panel is up. PWR fades it off or back on. The PC `main` creates the arena and calls the same host. Neither target inits I2C, Wi-Fi, the codec, or the IMU.
+`app_main` drives `BAT_EN` high, starts NVS and the NimBLE central, creates the arena, then `engine_host_run`. On the device, `Engine::run` paints one frame and returns, so the host calls it in a loop. On the PC, that call already loops until the window closes. The drawer fades the backlight on after the panel is up. PWR fades it off or back on. The PC `main` creates the arena and calls the same host. Neither target inits I2C, Wi-Fi, the codec, or the IMU.
 
 ## Decision log
 
@@ -170,6 +186,10 @@ Boot log, after the engine buffer exists: free internal heap, largest free inter
 | 2026-10-15 | Physics is a later kinematic step from Metanet tutorial A. Engine physics stays compiled out. The school demo is a mechanic reference only |
 | 2026-10-15 | Bluedroid BLE-only is on from the first device boot. Wi-Fi is off. HID report map is still open. PC reads a DS4Windows Xbox pad and does not open a radio |
 | 2026-10-15 | PC keyboard ORs into the same snapshot as the Xbox pad. Keys follow the Q36 face. Pair, the mode slide, the LED, the reset hole, and Type-C are not play buttons. The device snapshot stays clear |
+| 2026-10-15 | Device BLE host is NimBLE central for Pad Emu. The Q36 HID map stays unread. Wi-Fi stays off. A linked report fills the snapshot |
+| 2026-10-15 | Device ground shows the Pad Emu link. Linked green is `(0, 140, 32)`. A drop scans again, without the duplicate filter, and retries a refused scan |
+| 2026-10-15 | Pad link matches pademu reconnect: 2 s supervision, no bonding, and a 2 s watch that restarts a dead scan or an attempt stuck for 8 s |
+| 2026-10-15 | Device host repeats `Engine::run`. That call is one frame on the device; the PC call already loops |
 | 2026-10-15 | Fixed timestep length and feel constants stay open until something actually jumps |
 | 2026-10-15 | One 64 KB PSRAM arena, carved once, never freed. BLE's byte cost stays unmeasured until the boot log |
 | 2026-10-15 | Nidhogg 1 art: 4-color screens, 1bpp or 2bpp, no copied assets. NES audio voices stay off. Later sound is PCM on the ES8311 |

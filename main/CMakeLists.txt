@@ -16,13 +16,15 @@ especter_pixelroot32_sources(ENGINE_SRCS "${PR32}" OFF)
 idf_component_register(
     SRCS
         "app_main.c"
+        "pad_link.c"
+        "actions_pad.c"
         "${ROOT}/game/arena.c"
-        "${ROOT}/game/actions.c"
         "${ROOT}/game/world.c"
         "${ROOT}/host/engine_host.cpp"
         "${ROOT}/host/st7789_drawer.cpp"
         ${ENGINE_SRCS}
     INCLUDE_DIRS
+        "."
         "${ROOT}/game"
         "${ROOT}/host"
         "${ROOT}/compat"

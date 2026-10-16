@@ -651,6 +651,8 @@ support a decision. Keep links to the detailed agent report.
                off. School demo is mechanics only
   2026-10-15   Bluedroid BLE-only on at boot. Wi-Fi off.    architecture.md                  high         HID map is captured
                Report map still open. PC reads DS4Windows
+  2026-10-15   Device host is NimBLE central for Pad Emu.   architecture.md                  high         A Q36 report is captured
+               Q36 HID map still unread. Wi-Fi off
   2026-10-15   Fixed-step length and feel constants open    not measured                     low          Something jumps
   2026-10-15   64 KB PSRAM arena, carved once, never freed  architecture.md memory table     high         A slice no longer fits
   2026-10-15   Nidhogg 1 art. NES voices off. Later PCM     architecture.md                  high         A speaker test

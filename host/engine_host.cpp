@@ -16,12 +16,39 @@
 #ifdef PLATFORM_NATIVE
 #include <SDL2/SDL.h>
 #else
+#include "pad_link.h"
 #include "st7789_drawer.h"
+
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+
+#include <cstdint>
 #endif
 
 namespace {
+
+#ifndef PLATFORM_NATIVE
+/* [rgb565] Empacota r, g e b em RGB565. */
+uint16_t rgb565(int r, int g, int b)
+{
+    return (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+}
+
+/* [link_ground] Devolve a cor do ground segundo o link de [pad_link_read]. */
+uint16_t link_ground(void)
+{
+    pad_view view;
+
+    pad_link_read(&view);
+    if (view.link == PAD_LINK_LINKED) {
+        return rgb565(0, 140, 32);
+    }
+    if (view.link == PAD_LINK_SCANNING) {
+        return rgb565(220, 180, 0);
+    }
+    return rgb565(180, 0, 0);
+}
+#endif
 
 #ifdef PLATFORM_NATIVE
 int g_pc_named;
@@ -81,7 +108,7 @@ public:
 #endif
     }
 
-    /* [rect_scene::draw] Pinta o ground e o Rect. O FPS vem de [pc_note_frame]. */
+    /* [rect_scene::draw] Pinta o ground e o Rect. No device a cor vem de [link_ground]. O FPS vem de [pc_note_frame]. */
     void draw(pixelroot32::graphics::Renderer &renderer) override
     {
         int x;
@@ -90,7 +117,11 @@ public:
         int h;
 
         world_rect(&x, &y, &w, &h);
+#ifdef PLATFORM_NATIVE
         renderer.drawFilledRectangle(0, 0, WORLD_VIEW, WORLD_VIEW, pixelroot32::graphics::Color::DarkGreen);
+#else
+        renderer.drawFilledRectangleW(0, 0, WORLD_VIEW, WORLD_VIEW, link_ground());
+#endif
         renderer.drawFilledRectangle(x, y, w, h, pixelroot32::graphics::Color::White);
 #ifdef PLATFORM_NATIVE
         if (g_pc_fps >= 0) {
@@ -125,7 +156,7 @@ void log_memory(void)
 
 } // namespace
 
-/* [engine_host_run] Sobe a Scene depois de [world_init] e entra no laço do Engine. */
+/* [engine_host_run] Sobe a Scene depois de [world_init] e entra no laço do Engine. No device cada Engine::run pinta um frame e volta, então o host repete. */
 extern "C" void engine_host_run(void)
 {
     if (world_init() != 0) {
@@ -161,5 +192,11 @@ extern "C" void engine_host_run(void)
     engine.init();
     log_memory();
     engine.setScene(&g_scene);
+#ifdef PLATFORM_NATIVE
     engine.run();
+#else
+    for (;;) {
+        engine.run();
+    }
+#endif
 }
