@@ -653,7 +653,9 @@ support a decision. Keep links to the detailed agent report.
                Report map still open. PC reads DS4Windows
   2026-10-15   Device host is NimBLE central for Pad Emu.   architecture.md                  high         A Q36 report is captured
                Q36 HID map still unread. Wi-Fi off
-  2026-10-15   Fixed-step length and feel constants open    not measured                     low          Something jumps
+  2026-10-15   Sim tick is 16 ms, at most 4 per update.     architecture.md                  medium       The cage feel is retuned
+               First cage tune. BOOT resets the Pad Emu
+               link. Present rate is drawn top-right
   2026-10-15   64 KB PSRAM arena, carved once, never freed  architecture.md memory table     high         A slice no longer fits
   2026-10-15   Nidhogg 1 art. NES voices off. Later PCM     architecture.md                  high         A speaker test
                on ES8311

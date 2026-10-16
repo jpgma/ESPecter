@@ -10,11 +10,11 @@ extern "C" {
 #define WORLD_VIEW 240
 #define WORLD_RECT 16
 
-/* [world_init] Monta o Rect na slice de [arena_world]. Devolve 0 se [arena_ready] servir. */
+/* [world_init] Monta o corpo no centro da slice de [arena_world]. Devolve 0 se [arena_ready] servir. */
 int world_init(void);
-/* [world_tick] Desloca o Rect no plano com as actions de [actions_capture]. */
+/* [world_tick] Integra um tick fixo com as actions de [actions_capture]. */
 void world_tick(const actions *input);
-/* [world_rect] Escreve posição e tamanho do Rect. */
+/* [world_rect] Escreve a posição em pixels e o tamanho do Rect. */
 void world_rect(int *x, int *y, int *w, int *h);
 
 #ifdef __cplusplus

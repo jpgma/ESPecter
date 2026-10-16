@@ -131,6 +131,15 @@ void backlight_start(void)
     }
 }
 
+/* [spi_wait] Espera um DMA de [st7789_drawer::sendBuffer] terminar. Devolve 1 se chegou. */
+int spi_wait(SemaphoreHandle_t done)
+{
+    if (xSemaphoreTake(done, pdMS_TO_TICKS(200)) == pdTRUE) {
+        return 1;
+    }
+    ESP_LOGW(k_tag, "SPI done timed out");
+    return 0;
+}
 /* [spi_done_cb] Acorda a task quando o band SPI termina. */
 bool spi_done_cb(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
 {
@@ -177,7 +186,7 @@ uint8_t st7789_drawer::index_for(uint16_t color)
     return 0;
 }
 
-/* [st7789_drawer::init] Sobe o SPI3 e o panel, depois [backlight_start]. */
+/* [st7789_drawer::init] Sobe o SPI3, dois bands DMA e o panel, depois [backlight_start]. */
 void st7789_drawer::init()
 {
     spi_bus_config_t buscfg = {};
@@ -198,7 +207,7 @@ void st7789_drawer::init()
     physicalHeight = k_height;
 
     pixels = static_cast<uint8_t *>(heap_caps_malloc(k_width * k_height, MALLOC_CAP_INTERNAL));
-    band = static_cast<uint16_t *>(heap_caps_malloc(k_band_pixels * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+    band = static_cast<uint16_t *>(heap_caps_malloc(k_band_pixels * 2 * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
     if (pixels == nullptr || band == nullptr) {
         ESP_LOGE(k_tag, "framebuffer alloc failed");
         std::abort();
@@ -232,7 +241,7 @@ void st7789_drawer::init()
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(lcd, true));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(lcd, true));
 
-    done = xSemaphoreCreateBinary();
+    done = xSemaphoreCreateCounting(2, 0);
     callbacks.on_color_trans_done = spi_done_cb;
     ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io, &callbacks, done));
 
@@ -264,7 +273,7 @@ void st7789_drawer::drawPixel(int x, int y, uint16_t color)
     pixels[static_cast<size_t>(y * logicalWidth + x)] = index_for(color);
 }
 
-/* [st7789_drawer::drawFilledRectangle] Preenche um rectangle com um índice da palette. */
+/* [st7789_drawer::drawFilledRectangle] Preenche um rectangle com um índice da palette. Uma linha cheia usa memset. */
 void st7789_drawer::drawFilledRectangle(int x, int y, int w, int h, uint16_t color)
 {
     int x0;
@@ -289,6 +298,12 @@ void st7789_drawer::drawFilledRectangle(int x, int y, int w, int h, uint16_t col
         y1 = logicalHeight;
     }
     index = index_for(color);
+    if (x0 == 0 && x1 == logicalWidth) {
+        for (row = y0; row < y1; row++) {
+            std::memset(pixels + static_cast<size_t>(row * logicalWidth), index, static_cast<size_t>(logicalWidth));
+        }
+        return;
+    }
     for (row = y0; row < y1; row++) {
         uint8_t *dst = pixels + static_cast<size_t>(row * logicalWidth);
         for (col = x0; col < x1; col++) {
@@ -297,34 +312,49 @@ void st7789_drawer::drawFilledRectangle(int x, int y, int w, int h, uint16_t col
     }
 }
 
-/* [st7789_drawer::sendBuffer] Converte bands 8bpp em RGB565 e envia por DMA. */
+/* [st7789_drawer::sendBuffer] Converte o band ocioso enquanto o outro segue no DMA. */
 void st7789_drawer::sendBuffer()
 {
     auto *lcd = static_cast<esp_lcd_panel_handle_t>(panel);
     auto *done = static_cast<SemaphoreHandle_t>(spi_done);
     int y;
+    int slot;
+    int pending;
 
     if (!ready || pixels == nullptr || band == nullptr) {
         return;
     }
+    slot = 0;
+    pending = 0;
     for (y = 0; y < k_height; y += k_band_rows) {
         int rows = k_band_rows;
         int row;
+        uint16_t *dst_band;
+
+        if (pending == 2) {
+            spi_wait(done);
+            pending -= 1;
+        }
         if (y + rows > k_height) {
             rows = k_height - y;
         }
+        dst_band = band + slot * k_band_pixels;
         for (row = 0; row < rows; row++) {
             const uint8_t *src = pixels + static_cast<size_t>((y + row) * k_width);
-            uint16_t *dst = band + row * k_width;
+            uint16_t *dst = dst_band + row * k_width;
             int x;
+
             for (x = 0; x < k_width; x++) {
                 dst[x] = palette[src[x]];
             }
         }
-        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(lcd, 0, y, k_width, y + rows, band));
-        if (xSemaphoreTake(done, pdMS_TO_TICKS(200)) != pdTRUE) {
-            ESP_LOGW(k_tag, "SPI done timed out");
-        }
+        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(lcd, 0, y, k_width, y + rows, dst_band));
+        pending += 1;
+        slot ^= 1;
+    }
+    while (pending > 0) {
+        spi_wait(done);
+        pending -= 1;
     }
 }
 

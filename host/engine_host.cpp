@@ -8,6 +8,7 @@
 #include "core/Scene.h"
 #include "graphics/Color.h"
 #include "graphics/DisplayConfig.h"
+#include "graphics/FontManager.h"
 #include "graphics/Renderer.h"
 
 #include <cstdio>
@@ -52,9 +53,6 @@ uint16_t link_ground(void)
 
 #ifdef PLATFORM_NATIVE
 int g_pc_named;
-int g_pc_fps = -1;
-unsigned long g_pc_ms;
-int g_pc_frames;
 
 /* [pc_window_bind] Põe o título ESPecter na window SDL, uma vez. */
 void pc_window_bind(void)
@@ -73,42 +71,59 @@ void pc_window_bind(void)
         g_pc_named = 1;
     }
 }
-
-/* [pc_note_frame] Acumula o frame e atualiza o FPS a cada meio segundo. */
-void pc_note_frame(unsigned long delta_time)
-{
-    pc_window_bind();
-    if (delta_time == 0 || delta_time > 100) {
-        return;
-    }
-    g_pc_ms += delta_time;
-    g_pc_frames += 1;
-    if (g_pc_ms < 500) {
-        return;
-    }
-    g_pc_fps = (int)((g_pc_frames * 1000ul) / g_pc_ms);
-    g_pc_ms = 0;
-    g_pc_frames = 0;
-}
 #endif
 
-class rect_scene : public pixelroot32::core::Scene {
-public:
-    /* [rect_scene::update] Aplica [actions_capture] e avança com [world_tick]. */
-    void update(unsigned long delta_time) override
-    {
+unsigned long g_sim_ms;
+int g_fps = -1;
+unsigned long g_fps_ms;
+int g_fps_frames;
+
+/* [sim_advance] Gasta o delta em ticks de 16 ms de [world_tick], no máximo 4. */
+void sim_advance(unsigned long delta_time)
+{
+    int steps;
+
+    g_sim_ms += delta_time;
+    steps = 0;
+    while (g_sim_ms >= 16 && steps < 4) {
         actions input;
 
         actions_capture(&input);
         world_tick(&input);
+        g_sim_ms -= 16;
+        steps += 1;
+    }
+    if (steps == 4 && g_sim_ms >= 16) {
+        g_sim_ms = 0;
+    }
+}
+
+/* [note_frame] Acumula o present e atualiza o FPS a cada meio segundo. */
+void note_frame(unsigned long delta_time)
+{
 #ifdef PLATFORM_NATIVE
-        pc_note_frame(delta_time);
-#else
-        (void)delta_time;
+    pc_window_bind();
 #endif
+    g_fps_ms += delta_time;
+    g_fps_frames += 1;
+    if (g_fps_ms < 500) {
+        return;
+    }
+    g_fps = (int)((g_fps_frames * 1000ul) / g_fps_ms);
+    g_fps_ms = 0;
+    g_fps_frames = 0;
+}
+
+class rect_scene : public pixelroot32::core::Scene {
+public:
+    /* [rect_scene::update] Avança com [sim_advance] e mede o present em [note_frame]. */
+    void update(unsigned long delta_time) override
+    {
+        sim_advance(delta_time);
+        note_frame(delta_time);
     }
 
-    /* [rect_scene::draw] Pinta o ground e o Rect. No device a cor vem de [link_ground]. O FPS vem de [pc_note_frame]. */
+    /* [rect_scene::draw] Pinta o ground, o Rect e o FPS no canto superior direito. No device a cor vem de [link_ground]. */
     void draw(pixelroot32::graphics::Renderer &renderer) override
     {
         int x;
@@ -123,14 +138,19 @@ public:
         renderer.drawFilledRectangleW(0, 0, WORLD_VIEW, WORLD_VIEW, link_ground());
 #endif
         renderer.drawFilledRectangle(x, y, w, h, pixelroot32::graphics::Color::White);
-#ifdef PLATFORM_NATIVE
-        if (g_pc_fps >= 0) {
+        if (g_fps >= 0) {
             char label[16];
+            int text_w;
+            int text_x;
 
-            std::snprintf(label, sizeof label, "%d FPS", g_pc_fps);
-            renderer.drawText(label, 4, 4, pixelroot32::graphics::Color::White, 1);
+            std::snprintf(label, sizeof label, "%d FPS", g_fps);
+            text_w = pixelroot32::graphics::FontManager::textWidth(nullptr, label, 1);
+            text_x = WORLD_VIEW - text_w - 1;
+            if (text_x < 0) {
+                text_x = 0;
+            }
+            renderer.drawText(label, text_x, 0, pixelroot32::graphics::Color::White, 1);
         }
-#endif
     }
 };
 

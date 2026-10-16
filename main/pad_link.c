@@ -2,9 +2,11 @@
 
 #include <string.h>
 
+#include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "host/ble_hs.h"
 #include "host/ble_store.h"
 #include "host/ble_uuid.h"
@@ -38,6 +40,11 @@ static int s_have_conn;
 static uint16_t s_conn;
 static int64_t s_attempt_us;
 static struct ble_npl_callout s_watch;
+static struct ble_npl_callout s_boot;
+static int s_drop;
+static int s_boot_armed;
+static int s_boot_down;
+static int s_boot_stable;
 static uint16_t s_svc_start;
 static uint16_t s_svc_end;
 static uint16_t s_val_handle;
@@ -124,9 +131,12 @@ static int adv_has_service(const struct ble_gap_disc_desc *disc)
     return 0;
 }
 
-/* [mark_linked] O notify está de pé. [watch_cb] deixa esta fase quieta. */
+/* [mark_linked] O notify está de pé. [watch_cb] deixa esta fase quieta. O reset do BOOT ignora o notify. */
 static void mark_linked(void)
 {
+    if (s_drop) {
+        return;
+    }
     s_phase = PHASE_LINKED;
     set_link(PAD_LINK_LINKED);
 }
@@ -237,7 +247,7 @@ static int on_svc(uint16_t conn_handle, const struct ble_gatt_error *error,
     return 0;
 }
 
-/* [gap_event] Trata scan, conexão, queda, pairing repetido e o notify do report. */
+/* [gap_event] Trata scan, conexão, queda, pairing repetido e o notify do report. Uma conexão que chega com o reset do BOOT é terminada. */
 static int gap_event(struct ble_gap_event *event, void *arg)
 {
     uint8_t own_addr_type;
@@ -251,7 +261,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     (void)arg;
     switch (event->type) {
     case BLE_GAP_EVENT_DISC:
-        if (s_phase != PHASE_SCAN || !adv_has_service(&event->disc)) {
+        if (s_drop || s_phase != PHASE_SCAN || !adv_has_service(&event->disc)) {
             return 0;
         }
         s_phase = PHASE_CONNECTING;
@@ -290,6 +300,13 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         }
         s_conn = event->connect.conn_handle;
         s_have_conn = 1;
+        if (s_drop) {
+            if (ble_gap_terminate(s_conn, BLE_ERR_REM_USER_CONN_TERM) != 0) {
+                s_have_conn = 0;
+                start_scan();
+            }
+            return 0;
+        }
         s_phase = PHASE_DISCOVER;
         note_attempt();
         s_svc_start = 0;
@@ -355,6 +372,7 @@ static void start_scan(void)
         s_phase = PHASE_IDLE;
         return;
     }
+    s_drop = 0;
     params.filter_duplicates = 0;
     params.passive = 0;
     s_phase = PHASE_SCAN;
@@ -414,6 +432,87 @@ static void on_sync(void)
     start_scan();
 }
 
+/* [boot_cb] Termina o link do Pad Emu e deixa [start_scan] recomeçar. */
+static void boot_cb(struct ble_npl_event *ev)
+{
+    (void)ev;
+    ESP_LOGI(TAG, "boot reset");
+    s_drop = 1;
+    clear_buttons();
+    set_link(PAD_LINK_DOWN);
+    if (s_have_conn) {
+        if (ble_gap_terminate(s_conn, BLE_ERR_REM_USER_CONN_TERM) != 0) {
+            s_have_conn = 0;
+            start_scan();
+        }
+        return;
+    }
+    if (s_phase == PHASE_CONNECTING) {
+        ble_gap_conn_cancel();
+        return;
+    }
+    if (s_phase == PHASE_SCAN && ble_gap_disc_active()) {
+        if (ble_gap_disc_cancel() == 0) {
+            return;
+        }
+    }
+    start_scan();
+}
+
+/* [boot_scan] Debounce do BOOT e arma o callout de [boot_cb]. */
+static void boot_scan(void)
+{
+    int pressed;
+
+    pressed = gpio_get_level(GPIO_NUM_0) == 0;
+    if (!s_boot_armed) {
+        if (!pressed) {
+            s_boot_armed = 1;
+        }
+        return;
+    }
+    if (!pressed) {
+        s_boot_stable = 0;
+        s_boot_down = 0;
+        return;
+    }
+    if (s_boot_stable < 2) {
+        s_boot_stable++;
+    }
+    if (s_boot_stable < 2 || s_boot_down) {
+        return;
+    }
+    s_boot_down = 1;
+    ble_npl_callout_reset(&s_boot, 0);
+}
+
+/* [boot_task] Chama [boot_scan] a cada 20 ms. */
+static void boot_task(void *param)
+{
+    (void)param;
+    for (;;) {
+        boot_scan();
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+/* [boot_start] Configura o GPIO0 e sobe [boot_task]. */
+static void boot_start(void)
+{
+    gpio_config_t key = {0};
+
+    key.pin_bit_mask = 1ull << GPIO_NUM_0;
+    key.mode = GPIO_MODE_INPUT;
+    key.pull_up_en = GPIO_PULLUP_ENABLE;
+    key.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    key.intr_type = GPIO_INTR_DISABLE;
+    ESP_ERROR_CHECK(gpio_config(&key));
+    ble_npl_callout_init(&s_boot, nimble_port_get_dflt_eventq(), boot_cb, NULL);
+    if (xTaskCreate(boot_task, "padboot", 2048, NULL, 1, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "boot task failed");
+    }
+}
+
 /* [host_task] Roda o laço do NimBLE. */
 static void host_task(void *param)
 {
@@ -422,7 +521,7 @@ static void host_task(void *param)
     nimble_port_freertos_deinit();
 }
 
-/* [pad_link_start] Sobe o NimBLE central e procura o Pad Emu. O NVS já está de pé por [nvs_start]. */
+/* [pad_link_start] Sobe o NimBLE central, a task do BOOT e procura o Pad Emu. O NVS já está de pé por [nvs_start]. */
 void pad_link_start(void)
 {
     ESP_ERROR_CHECK(nimble_port_init());
@@ -436,6 +535,7 @@ void pad_link_start(void)
     ble_hs_cfg.sm_sc = 0;
     ble_store_config_init();
     ble_npl_callout_init(&s_watch, nimble_port_get_dflt_eventq(), watch_cb, NULL);
+    boot_start();
     nimble_port_freertos_init(host_task);
     ble_npl_callout_reset(&s_watch, ble_npl_time_ms_to_ticks32(2000));
 }

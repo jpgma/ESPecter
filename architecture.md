@@ -43,19 +43,19 @@ On this target [graphics/DisplayConfig.h](third_party/pixelroot32/include/graphi
 
 Compile flags: C++17, no exceptions, no RTTI, `PIXELROOT32_NO_TFT_ESPI`, `PIXELROOT32_NO_I2S_AUDIO`, and `PIXELROOT32_ENABLE_AUDIO`, `PHYSICS`, `PARTICLES`, `UI_SYSTEM`, `TOUCH`, `SCENE_TRANSITIONS`, `CAMERA_EFFECTS`, and `STATIC_TILEMAP_FB_CACHE` all 0.
 
-The PC build defines `PLATFORM_NATIVE` and uses the engine's SDL2 drawer. It does not compile the ST7789 drawer or the Arduino shim. The window title is ESPecter. The host draws the measured frame rate in the corner of that window. The device scene does not.
+The PC build defines `PLATFORM_NATIVE` and uses the engine's SDL2 drawer. It does not compile the ST7789 drawer or the Arduino shim. The window title is ESPecter. Both targets draw the present rate at the top-right, in the engine default `FONT_5X7` at size 1. That glyph is 5×7 with 1 px of spacing, and size 1 is the smallest `drawText` still draws.
 
 ## Hardware consequences
 
 - Panel: write-only ST7789, 240×240 visible, RGB565, SPI mode 3 at 80 MHz. GPIO21 CS, GPIO38 CLK, GPIO39 MOSI, GPIO45 DC, GPIO40 RST, GPIO46 backlight. GPIO45 and GPIO46 are strapping pins. They are configured only after boot. No MISO. No TE. Tearing is a hardware fact. Dirty rectangles are the later mitigation.
 - Backlight is LEDC low-speed channel 0 on GPIO46: 5 kHz, 10-bit. Duty starts at 0. The drawer fades it on after the panel is up. A full swing is requested at 420 ms. At 5 kHz the fade hardware holds each duty step for 2 cycles, so the glass takes about 410 ms. A reverse mid-fade keeps that duty per millisecond. PWR (GPIO5) is active low with an internal pull-up. The scan ignores it until the pin has been seen released, then toggles after two pressed samples 20 ms apart.
-- One full RGB565 frame is 115200 bytes and about 12.3 ms on the wire. The drawer presents 1:1 in one 16-row DMA band (7680 bytes). A second full frame is not reserved.
+- One full RGB565 frame is 115200 bytes and about 12.3 ms on the wire. The drawer presents 1:1 through two 16-row DMA bands (15360 bytes): the idle band is filled while the other is on the wire. A second full frame is not reserved.
 - Internal SRAM is 512 KB. DMA and the BLE controller live here. PSRAM cannot hold them.
 - PSRAM is 8 MB octal. The game arena is one 64 KB block here. The rest stays free so a stray heap allocation is visible.
 - Flash is 16 MB quad, not OPI. `sdkconfig.defaults` sets that.
 - `BAT_EN` (GPIO2) is driven high before any blocking call. USB Serial/JTAG dies in deep sleep. There is no I2C fuel gauge. Deep sleep is not used.
 - One I2C bus (GPIO41/42): QMI8658A `0x6B`, CST816D `0x15`, ES8311 `0x18`, ES7210 `0x40`. No second bus. This binary does not init I2C, so those devices stay down until one owner exists. Touch is one finger. The IMU has no magnetometer, so yaw is not observable.
-- PLUS is GPIO4 and BOOT is GPIO0, reserved as a later on-device fallback. PWR (GPIO5) is the power latch, not a game button. A press fades the backlight off or back on.
+- PLUS is GPIO4 and stays unread. BOOT is GPIO0, active low, configured as an input with pull-up after the app is up. A press terminates the Pad Emu link and scans again. The sample ignores the pin until it has been seen released, then accepts one press after two pressed samples 20 ms apart. Holding it does not repeat. PWR (GPIO5) is the power latch, not a game button. A press fades the backlight off or back on.
 - Wi-Fi is not started. On IDF 5.5 `ESP_WIFI_ENABLED` has no prompt, so the wifi library stays linked because the BT component requires it. This binary does not call `esp_wifi_init`, so that DMA is not allocated.
 - The speaker and ES8311 exist. PixelRoot32's I2S backend is a bare DAC, not this codec. Audio is not in this binary. See the sound section.
 - CPU is 240 MHz (`CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240`). ESP-IDF is 5.5 or newer. Target `esp32s3`.
@@ -90,13 +90,13 @@ Later music and effects are short PCM clips in flash, played through the ES8311.
 
 The Q36XDV is not on the board. The chip is BLE only, so Classic HID is not an option. The Q36 report map is still unread. This binary does not connect to the first advertisement it sees.
 
-The phone stand-in is what the device reads. The app name is Pad Emu. It advertises service `f31a0001-7c4e-4a2b-9e15-6d8f0b2c4a10` and notifies a 3-byte report on `f31a0002-7c4e-4a2b-9e15-6d8f0b2c4a10`: a little-endian `uint16` of buttons, then a hat (`0` up, then clockwise, `8` neutral). [main/pad_link.c](main/pad_link.c) is the NimBLE central. It scans for that service, subscribes to the report, and copies each notify into a static mailbox. A notify also marks the link up, and the 2 s watch leaves that phase alone. [main/actions_pad.c](main/actions_pad.c) calls `pad_link_read` from `actions_capture` and fills the same snapshot the PC keyboard fills. `game/` does not include that reader. While the link is down the mailbox is clear and the rectangle stays centered. A drop clears the mailbox and the central scans again. Advertisements are not duplicate-filtered, so the same phone is seen again. The connection uses a 2 s supervision timeout and a 10 s connect attempt, with no bonding. A host timer every 2 s restarts a scan that died, and abandons a connect or discover that has sat for 8 s. A linked report fills the held fields below. This stand-in has no stick.
+The phone stand-in is what the device reads. The app name is Pad Emu. It advertises service `f31a0001-7c4e-4a2b-9e15-6d8f0b2c4a10` and notifies a 3-byte report on `f31a0002-7c4e-4a2b-9e15-6d8f0b2c4a10`: a little-endian `uint16` of buttons, then a hat (`0` up, then clockwise, `8` neutral). [main/pad_link.c](main/pad_link.c) is the NimBLE central. It scans for that service, subscribes to the report, and copies each notify into a static mailbox. A notify also marks the link up, and the 2 s watch leaves that phase alone. [main/actions_pad.c](main/actions_pad.c) calls `pad_link_read` from `actions_capture` and fills the same snapshot the PC keyboard fills. `game/` does not include that reader. While the link is down the mailbox is clear and the body keeps simulating. A drop clears the mailbox and the central scans again. A press of BOOT does the same when a vanished peer never delivers a disconnect: the one connection slot is dropped, the mailbox is cleared, and the central scans again. The reset runs on the NimBLE event queue. A connect that completes after the press is terminated too. Advertisements are not duplicate-filtered, so the same phone is seen again. The connection uses a 2 s supervision timeout and a 10 s connect attempt, with no bonding. A host timer every 2 s restarts a scan that died, and abandons a connect or discover that has sat for 8 s. A linked report fills the held fields below. This stand-in has no stick.
 
 `sdkconfig.defaults` enables NimBLE: central, observer, one connection, GATT client, host pinned to core 0, pool allocations in internal RAM. Bluedroid is off. This binary does not call `esp_wifi_init`. `app_main` raises `BAT_EN`, starts NVS, starts this central, then the arena, then the scene.
 
 The PC build does not open a Bluetooth radio and does not link NimBLE or Bluedroid. DS4Windows owns the radio and, in its default profile, exposes an Xbox 360 pad. [pc/actions_ds4.c](pc/actions_ds4.c) is compiled only into the PC target. It reads the keyboard and the first SDL game controller, and ORs them. A virtual DualShock profile is not the one this sim supports. The device links [main/actions_pad.c](main/actions_pad.c), which reads the Pad Emu mailbox and does not read a keyboard. `game/` only sees the snapshot.
 
-[game/actions.h](game/actions.h) is the shared snapshot. The host calls `actions_capture` once per update. Held play buttons are `dpad_up`, `dpad_down`, `dpad_left`, `dpad_right`, `face_y`, `face_x`, `face_a`, `face_b`, `shoulder_l`, `trigger_l2`, `trigger_r2`, `shoulder_r`, `select`, `home`, and `start`. The reader then derives `move_up`, `move_down`, `move_left`, `move_right`, `jump`, `pause`, `confirm`, and `cancel`. The left stick past a dead zone also sets `move_left` / `move_right`. The Q36 and Pad Emu have no stick; that axis is only the Xbox stand-in.
+[game/actions.h](game/actions.h) is the shared snapshot. The host calls `actions_capture` once per sim tick. Held play buttons are `dpad_up`, `dpad_down`, `dpad_left`, `dpad_right`, `face_y`, `face_x`, `face_a`, `face_b`, `shoulder_l`, `trigger_l2`, `trigger_r2`, `shoulder_r`, `select`, `home`, and `start`. The reader then derives `move_up`, `move_down`, `move_left`, `move_right`, `jump`, `pause`, `confirm`, and `cancel`. The left stick past a dead zone also sets `move_left` / `move_right`. The Q36 and Pad Emu have no stick; that axis is only the Xbox stand-in.
 
 Pad Emu report, while the link is up:
 
@@ -122,21 +122,27 @@ Keyboard placement follows the Q36 face. The Type-C port, LED, reset hole, X/D/V
 
 Derived, for either source:
 
-- D-pad: `move_up` / `move_down` / `move_left` / `move_right`. The rectangle steps on that axis. Opposite directions cancel.
+- D-pad left and right: `move_left` / `move_right`. Opposite directions cancel. `move_up` and `move_down` stay in the snapshot and do not move the body.
 - Left stick past a dead zone: `move_left` / `move_right` as well.
-- South button (`face_a`): `jump` and `confirm`. The rectangle steps up while held. D-pad down cancels that step.
+- South button (`face_a`): `jump` and `confirm`. The body jumps on the rising edge while the floor contact of that tick is set. Holding it does not jump again. Releasing it while rising uses the heavier gravity.
 - Menu (`start`): `pause`. B (`face_b`): `cancel`.
-- No key and no controller on PC, or no Pad Emu link on the device: the snapshot stays clear and the rectangle stays centered.
+- No key and no controller on PC, or no Pad Emu link on the device: the snapshot stays clear. The body still falls and rests on the bottom edge.
 
 ## Physics
 
-N++ is the movement. This binary does not run or jump in the physics sense. The rectangle step on PC is an input test, not the solver.
+N++ is the movement. The body is a 16×16 kinematic AABB. [game/world.c](game/world.c) integrates one fixed tick: accelerate or friction on x, gravity on y, move x and respond, move y and respond, then a jump impulse. `world_tick` takes no delta. One pixel is 256 subpixels, stored as `int` on the first world row, with velocity and the four border contacts.
 
-Solver to follow: [N Tutorial A](https://www.metanetsoftware.com/2016/n-tutorial-a-collision-detection-and-response). Tile world, move then respond, horizontal and vertical apart, swept tests so a fast fall does not tunnel.
+The host turns wall-clock milliseconds into ticks. `Engine::update` passes a whole-millisecond delta. The host adds it to an accumulator and calls `world_tick` once per 16 ms, at most four times per update. A zero delta adds nothing. Time left under 16 ms stays. If four ticks leave 16 ms or more, that remainder is dropped. Sixteen milliseconds is the step this clock can mark, 62.5 Hz, not 1000/60. Present rate does not scale velocity. The number in the corner is presents, not sim ticks.
 
-Mechanic reference, not code to port: `d:\Repos\refs\school-n--master`. Variable jump, heavier fall, wall slide and wall jump, square tiles first, wedges later, hazards as overlap. Do not take its classes, `std::vector`, per-overlap `new`, variable `deltaTime`, skeleton, or its speed constants.
+Feel, per tick: horizontal accel and friction 64 subpixels, max run 768 (3 px, about 188 px/s). Jump impulse −2048. Gravity 128 while rising with jump held, 256 otherwise. Fall caps at 2048, under the body, so a later 16 px tile is not skipped in one tick. A held jump reaches about 64 px. Releasing jump early uses the heavier gravity. These are the first tune for the 240 px cage.
 
-`PIXELROOT32_ENABLE_PHYSICS` stays 0. One collision truth, and it is game code. The ninja is kinematic. SoA rows live in the arena. The first physics slice, when it exists, is solid square tiles plus the body AABB.
+The four borders of the view stop the body and zero that axis. No bounce. No wall slide and no wall jump. The floor is the bottom edge, not a drawn tile. D-pad up and down do not move the body. With a clear snapshot the body still falls and rests on the bottom edge.
+
+Tiles are still later: [N Tutorial A](https://www.metanetsoftware.com/2016/n-tutorial-a-collision-detection-and-response), move then respond, horizontal and vertical apart, swept tests so a fast fall does not tunnel. Clamping into the view is exact for these four edges.
+
+Mechanic reference, not code to port: `d:\Repos\refs\school-n--master`. Wall slide and wall jump, square tiles, wedges, and hazards as overlap are still later. Do not take its classes, `std::vector`, per-overlap `new`, variable `deltaTime`, skeleton, or its speed constants.
+
+`PIXELROOT32_ENABLE_PHYSICS` stays 0. One collision truth, and it is game code. The ninja is kinematic. SoA rows live in the arena. The next physics slice is solid square tiles plus this body AABB.
 
 ## Memory
 
@@ -161,11 +167,12 @@ The device block comes from `heap_caps_malloc` with `MALLOC_CAP_SPIRAM`, after B
 | --- | --- | ---: | --- | --- |
 | BLE controller and host | internal | unmeasured | ESP-IDF | NimBLE, internal pools. Fill from the first boot log |
 | FreeRTOS stacks, including the BT host task | internal | unmeasured | ESP-IDF | |
-| Present band | internal, DMA | 7680 | ST7789 drawer | 16 rows of 240 RGB565. One band, reused |
+| Present band | internal, DMA | 15360 | ST7789 drawer | Two 16-row bands of 240 RGB565. The idle band fills during the other's DMA |
 | Backlight task stack | internal | 3072 | ST7789 drawer | Polls PWR. The fade itself is LEDC hardware |
+| Pad reset task stack | internal | 2048 | `pad_link` | Polls BOOT. The reset runs on the NimBLE event queue |
 | Logical buffer | internal | 57600 | ST7789 drawer | 240×240 8bpp. Not a second RGB565 frame |
 | Game arena | PSRAM | 65536 | `arena` | Never freed |
-| `world` slice | arena | 4096 | `world` | SoA. The rectangle uses the first row |
+| `world` slice | arena | 4096 | `world` | SoA. The body keeps subpixel position, velocity, and border contact on the first row |
 | `level` slice | arena | 32768 | reserved | Empty in this binary |
 | `scratch` slice | arena | 16384 | reserved | Overwritten in place. The offset does not move |
 | Spare | arena | 12288 | `arena` | Growing a slice takes from here and updates this table |
@@ -196,3 +203,7 @@ Boot log, after the engine buffer exists: free internal heap, largest free inter
 | 2026-10-15 | Touch and IMU stay off. Frame-time budgets stay open |
 | 2026-10-15 | Backlight is an LEDC fade on GPIO46. PWR fades it off and on. PLUS and BOOT stay unread |
 | 2026-10-15 | Build scripts live at the repo root. The PC window is titled ESPecter and draws its current frame rate |
+| 2026-10-15 | Sim tick is 16 ms of wall time, at most 4 per update. The first cage tune is in the physics section. Present rate does not scale the body |
+| 2026-10-15 | Both targets draw the present rate at the top-right in `FONT_5X7` size 1 |
+| 2026-10-15 | BOOT (GPIO0) terminates the Pad Emu link and scans again. PLUS stays unread |
+| 2026-10-15 | Present uses two 16-row DMA bands so the next band fills while the previous is on the wire |
