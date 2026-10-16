@@ -13,11 +13,11 @@ extern "C" {
 #define WORLD_BODY_H 12
 #define WORLD_SOLID_CAP 256
 
-/* [world_init] Monta o corpo no spawn, o apron de [map_at] na slice de [arena_level], o checkpoint no spawn e a câmera com a mola parada. Devolve 0 se [arena_ready] servir. */
+/* [world_init] Monta o corpo no spawn, o apron de [map_at] na slice de [arena_level], o checkpoint no spawn, o shuttle em x 464 e a câmera com a mola parada. Devolve 0 se [arena_ready] servir. */
 int world_init(void);
-/* [world_reset] Devolve o checkpoint ao spawn, recarrega o apron e põe o corpo lá. */
+/* [world_reset] Devolve o checkpoint ao spawn, recarrega o apron, encosta o shuttle em x 464 e põe o corpo lá. */
 void world_reset(void);
-/* [world_tick] Integra um tick fixo. move_down solta o latch e atravessa o one-way. O pit e o spike abrem 252 ms de morte e depois [body_place_at] no checkpoint. A saída congela até [world_reset]. A mola e [body_pose] só correm vivo. */
+/* [world_tick] Integra um tick fixo. O shuttle anda sempre. O rider soma esse dx antes das solves. move_down solta o latch e atravessa o one-way. O pit e o spike abrem 252 ms de morte e depois [body_place_at] no checkpoint. A saída congela o corpo até [world_reset]. A mola e [body_pose] só correm vivo. */
 void world_tick(const actions *input);
 /* [world_rect] Escreve a posição no mundo, em pixels, e o tamanho do Rect. */
 void world_rect(int *x, int *y, int *w, int *h);
@@ -35,6 +35,8 @@ void world_spike_rect(int *x, int *y, int *w, int *h);
 void world_checkpoint_rect(int *x, int *y, int *w, int *h);
 /* [world_exit_rect] Escreve a saída em pixels do mundo. */
 void world_exit_rect(int *x, int *y, int *w, int *h);
+/* [world_shuttle_rect] Escreve o shuttle em pixels do mundo. */
+void world_shuttle_rect(int *x, int *y, int *w, int *h);
 
 #ifdef __cplusplus
 }

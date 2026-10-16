@@ -130,6 +130,7 @@ struct draw_view {
     view_rect spike;
     view_rect checkpoint;
     view_rect exit_box;
+    view_rect shuttle;
     int debug;
     uint16_t ground;
     int battery_pct;
@@ -405,6 +406,8 @@ void publish_view(void)
     world_checkpoint_rect(&g_slot->view.checkpoint.x, &g_slot->view.checkpoint.y, &g_slot->view.checkpoint.w,
                           &g_slot->view.checkpoint.h);
     world_exit_rect(&g_slot->view.exit_box.x, &g_slot->view.exit_box.y, &g_slot->view.exit_box.w, &g_slot->view.exit_box.h);
+    world_shuttle_rect(&g_slot->view.shuttle.x, &g_slot->view.shuttle.y, &g_slot->view.shuttle.w,
+                       &g_slot->view.shuttle.h);
     g_slot->view.debug = g_debug;
 #ifndef PLATFORM_NATIVE
     g_slot->view.ground = link_ground();
@@ -498,6 +501,7 @@ uint16_t g_last_ground;
 view_rect g_last_spike;
 view_rect g_last_checkpoint;
 view_rect g_last_exit;
+view_rect g_last_shuttle;
 
 /* [rect_same] Devolve 1 se os dois Rect coincidem. */
 int rect_same(const view_rect *a, const view_rect *b)
@@ -531,7 +535,7 @@ int body_changed(void)
         || g_shown->face != g_last_face;
 }
 
-/* [mark_movers] Marca sólidos, spike, checkpoint, saída e corpo no cam_y. */
+/* [mark_movers] Marca sólidos, spike, checkpoint, saída, shuttle e corpo no cam_y. */
 void mark_movers(int cam_y)
 {
     int i;
@@ -542,6 +546,7 @@ void mark_movers(int cam_y)
     mark_rect_rows(cam_y, g_shown->spike.y, g_shown->spike.h);
     mark_rect_rows(cam_y, g_shown->checkpoint.y, g_shown->checkpoint.h);
     mark_rect_rows(cam_y, g_shown->exit_box.y, g_shown->exit_box.h);
+    mark_rect_rows(cam_y, g_shown->shuttle.y, g_shown->shuttle.h);
     mark_body_rows(cam_y, g_shown->body_y, g_shown->body_h);
 }
 
@@ -581,6 +586,10 @@ int mark_present_rows(void)
             mark_rect_rows(g_last_cam_y, g_last_exit.y, g_last_exit.h);
             mark_rect_rows(g_shown->cam_y, g_shown->exit_box.y, g_shown->exit_box.h);
         }
+        if (!rect_same(&g_shown->shuttle, &g_last_shuttle)) {
+            mark_rect_rows(g_last_cam_y, g_last_shuttle.y, g_last_shuttle.h);
+            mark_rect_rows(g_shown->cam_y, g_shown->shuttle.y, g_shown->shuttle.h);
+        }
     } else {
         if (body_changed()) {
             mark_body_rows(g_shown->cam_y, g_last_body_y, g_last_body_h);
@@ -597,6 +606,10 @@ int mark_present_rows(void)
         if (!rect_same(&g_shown->exit_box, &g_last_exit)) {
             mark_rect_rows(g_shown->cam_y, g_last_exit.y, g_last_exit.h);
             mark_rect_rows(g_shown->cam_y, g_shown->exit_box.y, g_shown->exit_box.h);
+        }
+        if (!rect_same(&g_shown->shuttle, &g_last_shuttle)) {
+            mark_rect_rows(g_shown->cam_y, g_last_shuttle.y, g_last_shuttle.h);
+            mark_rect_rows(g_shown->cam_y, g_shown->shuttle.y, g_shown->shuttle.h);
         }
     }
     if (g_shown->debug && (g_fps != g_last_fps || g_shown->battery_pct != g_last_battery)) {
@@ -624,6 +637,7 @@ void remember_present(void)
     g_last_spike = g_shown->spike;
     g_last_checkpoint = g_shown->checkpoint;
     g_last_exit = g_shown->exit_box;
+    g_last_shuttle = g_shown->shuttle;
     g_have_last = 1;
 }
 #endif
@@ -643,7 +657,7 @@ public:
 #endif
     }
 
-    /* [rect_scene::draw] Pinta a view de [load_view]: ground, sólidos, spike, checkpoint, saída e corpo no offset da câmera. No device só as rows de [mark_present_rows]. Com o debug, o wireframe das células, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No PC, com o PWR apagado, pinta preto e volta. */
+    /* [rect_scene::draw] Pinta a view de [load_view]: ground, sólidos, shuttle, spike, checkpoint, saída e corpo no offset da câmera. No device só as rows de [mark_present_rows]. Com o debug, o wireframe das células, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No PC, com o PWR apagado, pinta preto e volta. */
     void draw(pixelroot32::graphics::Renderer &renderer) override
     {
         int cam_x;
@@ -717,6 +731,13 @@ public:
             if (clip_view(cam_x, cam_y, &sx, &sy, &sw, &sh)) {
                 renderer.drawFilledRectangle(sx, sy, sw, sh, pixelroot32::graphics::Color::Black);
             }
+        }
+        mx = g_shown->shuttle.x;
+        my = g_shown->shuttle.y;
+        mw = g_shown->shuttle.w;
+        mh = g_shown->shuttle.h;
+        if (clip_view(cam_x, cam_y, &mx, &my, &mw, &mh)) {
+            renderer.drawFilledRectangle(mx, my, mw, mh, pixelroot32::graphics::Color::Black);
         }
         mx = g_shown->spike.x;
         my = g_shown->spike.y;

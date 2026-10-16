@@ -33,7 +33,13 @@
 #define WORLD_SPAN (WORLD_VIEW << WORLD_SUB)
 #define APRON_N 9
 #define PIT_Y 256
-#define WORLD_TAIL 11
+#define WORLD_TAIL 14
+#define SHUTTLE_W 32
+#define SHUTTLE_H 16
+#define SHUTTLE_X0 (464 << WORLD_SUB)
+#define SHUTTLE_X1 (496 << WORLD_SUB)
+#define SHUTTLE_Y (MAP_FLOOR_Y << WORLD_SUB)
+#define SHUTTLE_SPEED PIXPS_TO_SUBPIXPT(32, 1)
 #define LIFE_PLAY 0
 #define LIFE_DYING 1
 #define LIFE_DONE 2
@@ -75,6 +81,9 @@ static int *cp_cell_x;
 static int *cp_x;
 static int *cp_cell_y;
 static int *cp_y;
+static int *shuttle_x;
+static int *shuttle_dir;
+static int *shuttle_rider;
 static int *apron_tx;
 static int *apron_ty;
 static uint8_t *apron;
@@ -171,6 +180,15 @@ static int apron_oneway_top(int index, int *left, int *top, int *right)
     return 1;
 }
 
+/* [shuttle_box] Escreve o AABB do shuttle em subpixels do mundo. */
+static void shuttle_box(int *left, int *top, int *right, int *bottom)
+{
+    *left = *shuttle_x;
+    *top = SHUTTLE_Y;
+    *right = *shuttle_x + (SHUTTLE_W << WORLD_SUB);
+    *bottom = SHUTTLE_Y + (SHUTTLE_H << WORLD_SUB);
+}
+
 /* [axis_out] Devolve a posição que sai pela face mais curta. side recebe 1 na mínima e -1 na máxima. */
 static int axis_out(int pos, int size, int min_edge, int max_edge, int *side)
 {
@@ -187,7 +205,46 @@ static int axis_out(int pos, int size, int min_edge, int max_edge, int *side)
     return max_edge;
 }
 
-/* [body_embed] Tira best do sólido mais raso neste eixo e repete. hit fica se já estiver fora. */
+/* [embed_candidate] Guarda a saída mais rasa se best cruza a caixa. */
+static void embed_candidate(int horizontal, int fixed, int fixed_size, int move_size, int best, int left, int top,
+                            int right, int bottom, int *found, int *pen_best, int *out_best, int *side_best)
+{
+    int min_edge;
+    int max_edge;
+    int out;
+    int side;
+    int pen;
+
+    if (horizontal) {
+        if (!range_overlaps(fixed, fixed + fixed_size, top, bottom)) {
+            return;
+        }
+        if (!range_overlaps(best, best + move_size, left, right)) {
+            return;
+        }
+        min_edge = left;
+        max_edge = right;
+    } else {
+        if (!range_overlaps(fixed, fixed + fixed_size, left, right)) {
+            return;
+        }
+        if (!range_overlaps(best, best + move_size, top, bottom)) {
+            return;
+        }
+        min_edge = top;
+        max_edge = bottom;
+    }
+    out = axis_out(best, move_size, min_edge, max_edge, &side);
+    pen = side > 0 ? (best + move_size) - min_edge : max_edge - best;
+    if (!*found || pen < *pen_best) {
+        *found = 1;
+        *pen_best = pen;
+        *out_best = out;
+        *side_best = side;
+    }
+}
+
+/* [body_embed] Tira best do set ou do shuttle mais raso neste eixo e repete. hit fica se já estiver fora. */
 static void body_embed(int horizontal, int fixed, int fixed_size, int move_size, int *best, int *hit)
 {
     int pass;
@@ -200,13 +257,8 @@ static void body_embed(int horizontal, int fixed, int fixed_size, int move_size,
     int top;
     int right;
     int bottom;
-    int min_edge;
-    int max_edge;
-    int out;
-    int side;
-    int pen;
 
-    for (pass = 0; pass < APRON_N; pass++) {
+    for (pass = 0; pass < APRON_N + 1; pass++) {
         found = 0;
         pen_best = 0;
         out_best = *best;
@@ -215,33 +267,13 @@ static void body_embed(int horizontal, int fixed, int fixed_size, int move_size,
             if (!apron_set_box(i, &left, &top, &right, &bottom)) {
                 continue;
             }
-            if (horizontal) {
-                if (!range_overlaps(fixed, fixed + fixed_size, top, bottom)) {
-                    continue;
-                }
-                if (!range_overlaps(*best, *best + move_size, left, right)) {
-                    continue;
-                }
-                min_edge = left;
-                max_edge = right;
-            } else {
-                if (!range_overlaps(fixed, fixed + fixed_size, left, right)) {
-                    continue;
-                }
-                if (!range_overlaps(*best, *best + move_size, top, bottom)) {
-                    continue;
-                }
-                min_edge = top;
-                max_edge = bottom;
-            }
-            out = axis_out(*best, move_size, min_edge, max_edge, &side);
-            pen = side > 0 ? (*best + move_size) - min_edge : max_edge - *best;
-            if (!found || pen < pen_best) {
-                found = 1;
-                pen_best = pen;
-                out_best = out;
-                side_best = side;
-            }
+            embed_candidate(horizontal, fixed, fixed_size, move_size, *best, left, top, right, bottom, &found,
+                            &pen_best, &out_best, &side_best);
+        }
+        if (shuttle_x != 0) {
+            shuttle_box(&left, &top, &right, &bottom);
+            embed_candidate(horizontal, fixed, fixed_size, move_size, *best, left, top, right, bottom, &found,
+                            &pen_best, &out_best, &side_best);
         }
         if (!found) {
             return;
@@ -326,7 +358,7 @@ static void body_slide(void)
     }
 }
 
-/* [body_stop_x] Devolve o x composto na primeira face vertical cruzada. hit recebe -1, 1 ou 0. */
+/* [body_stop_x] Devolve o x composto na primeira face vertical cruzada, inclusive o shuttle. hit recebe -1, 1 ou 0. */
 static int body_stop_x(int x0, int dest, int y, int bw, int bh, int *hit)
 {
     int best;
@@ -360,11 +392,29 @@ static int body_stop_x(int x0, int dest, int y, int bw, int bh, int *hit)
             }
         }
     }
+    if (shuttle_x != 0) {
+        shuttle_box(&left, &top, &right, &bottom);
+        if (range_overlaps(y, y + bh, top, bottom)) {
+            if (dest > x0) {
+                face = left - bw;
+                if (x0 + bw <= left && dest + bw > left && face < best) {
+                    best = face;
+                    *hit = 1;
+                }
+            } else if (dest < x0) {
+                face = right;
+                if (x0 >= right && dest < right && face > best) {
+                    best = face;
+                    *hit = -1;
+                }
+            }
+        }
+    }
     body_embed(1, y, bh, bw, &best, hit);
     return best;
 }
 
-/* [body_stop_y] Devolve o y na primeira face cruzada. O one-way só para a queda vinda de cima, e skip ignora esse topo. hit recebe -1 teto, 1 chão ou 0. */
+/* [body_stop_y] Devolve o y na primeira face cruzada. O one-way só para a queda vinda de cima, e skip ignora esse topo. O shuttle entra como caixa, e o empate do chão fica com ele. hit recebe -1 teto, 1 chão ou 0. */
 static int body_stop_y(int y0, int dest, int x, int bw, int bh, int skip, int *hit)
 {
     int best;
@@ -413,11 +463,29 @@ static int body_stop_y(int y0, int dest, int x, int bw, int bh, int skip, int *h
             }
         }
     }
+    if (shuttle_x != 0) {
+        shuttle_box(&left, &top, &right, &bottom);
+        if (range_overlaps(x, x + bw, left, right)) {
+            if (dest > y0) {
+                face = top - bh;
+                if (y0 + bh <= top && dest + bh > top && face <= best) {
+                    best = face;
+                    *hit = 1;
+                }
+            } else if (dest < y0) {
+                face = bottom;
+                if (y0 >= bottom && dest < bottom && face > best) {
+                    best = face;
+                    *hit = -1;
+                }
+            }
+        }
+    }
     body_embed(0, x, bw, bh, &best, hit);
     return best;
 }
 
-/* [body_on_latch] Devolve 1 se um subpixel contra o muro ainda cruza uma face. */
+/* [body_on_latch] Devolve 1 se um subpixel contra o muro ou o shuttle ainda cruza uma face. */
 static int body_on_latch(void)
 {
     int side;
@@ -454,10 +522,17 @@ static int body_on_latch(void)
             return 1;
         }
     }
+    if (shuttle_x != 0) {
+        shuttle_box(&left, &top, &right, &bottom);
+        if (range_overlaps(probe, probe + bw, left, right) &&
+            range_overlaps(y, y + bh, top, bottom)) {
+            return 1;
+        }
+    }
     return 0;
 }
 
-/* [body_solve_x] Soma vx, projeta nas faces verticais, grava o latch e separa a célula. */
+/* [body_solve_x] Soma vx, projeta nas faces verticais, inclusive o shuttle, grava o latch e separa a célula. */
 static void body_solve_x(const actions *input)
 {
     int x0;
@@ -505,7 +580,7 @@ static void cam_note_ground(void)
     }
 }
 
-/* [body_solve_y] Soma vy, projeta nas faces, separa a célula e solta o latch no chão ou na saída do muro. move_down ignora o topo one-way. O chão chama [cam_note_ground]. */
+/* [body_solve_y] Soma vy, projeta nas faces, inclusive o shuttle, separa a célula e solta o latch no chão ou na saída do muro. move_down ignora o topo one-way. O chão do shuttle grava o rider. O chão chama [cam_note_ground]. */
 static void body_solve_y(const actions *input)
 {
     int x0;
@@ -514,6 +589,10 @@ static void body_solve_y(const actions *input)
     int bh;
     int hit;
     int y;
+    int left;
+    int top;
+    int right;
+    int bottom;
 
     x0 = compose_sub(row_cell_x[0], row_x[0]);
     y0 = compose_sub(row_cell_y[0], row_y[0]);
@@ -535,9 +614,16 @@ static void body_solve_y(const actions *input)
         row_wall[0] = 0;
     }
     cam_note_ground();
+    *shuttle_rider = 0;
+    if (hit > 0 && shuttle_x != 0) {
+        shuttle_box(&left, &top, &right, &bottom);
+        if (y + bh == top && range_overlaps(x0, x0 + bw, left, right)) {
+            *shuttle_rider = 1;
+        }
+    }
 }
 
-/* [body_jump] Impulsiona no chão, ou na diagonal se o latch de [body_solve_x] vale, e grava o ato do tick. */
+/* [body_jump] Impulsiona no chão, ou na diagonal se o latch de [body_solve_x] vale, limpa o rider e grava o ato do tick. */
 static void body_jump(const actions *input)
 {
     int edge;
@@ -547,6 +633,7 @@ static void body_jump(const actions *input)
     if (edge && row_hit_floor[0]) {
         row_vy[0] = WORLD_JUMP_VY;
         row_hit_floor[0] = 0;
+        *shuttle_rider = 0;
         row_act[0] = BODY_ACT_FLOOR;
     } else if (edge && body_latched()) {
         if (row_wall[0] < 0) {
@@ -556,6 +643,7 @@ static void body_jump(const actions *input)
         }
         row_vy[0] = -WORLD_WALL_JUMP;
         row_wall[0] = 0;
+        *shuttle_rider = 0;
         row_act[0] = BODY_ACT_WALL;
     }
     row_jump_was[0] = input->jump ? 1 : 0;
@@ -880,7 +968,7 @@ static void apron_sync(void)
     apron_load(tx, ty);
 }
 
-/* [body_place_at] Põe o corpo no local em subpixels, zerado, com a pose idle virada à direita, encosta a câmera e chama [apron_sync]. */
+/* [body_place_at] Põe o corpo no local em subpixels, zerado, com a pose idle virada à direita, limpa o rider, encosta a câmera e chama [apron_sync]. */
 static void body_place_at(int cell_x, int x, int cell_y, int y)
 {
     row_cell_x[0] = cell_x;
@@ -897,6 +985,7 @@ static void body_place_at(int cell_x, int x, int cell_y, int y)
     row_hit_ceil[0] = 0;
     row_jump_was[0] = 0;
     row_wall[0] = 0;
+    *shuttle_rider = 0;
     row_face[0] = 1;
     row_clip[0] = BODY_CLIP_IDLE;
     row_frame[0] = 0;
@@ -943,6 +1032,13 @@ static int apron_bind(void)
     return 0;
 }
 
+/* [shuttle_snap] Encosta o shuttle em x 464, indo para a direita. */
+static void shuttle_snap(void)
+{
+    *shuttle_x = SHUTTLE_X0;
+    *shuttle_dir = 1;
+}
+
 /* [mark_checkpoint] Grava o pé no chão sob o tile de [MAP_CP_TX]. */
 static void mark_checkpoint(void)
 {
@@ -955,7 +1051,7 @@ static void mark_checkpoint(void)
     *cp_y = (MAP_FLOOR_Y - WORLD_BODY_H) << WORLD_SUB;
 }
 
-/* [world_init] Monta o corpo no spawn, o apron de [map_at] na slice de [arena_level], o checkpoint no spawn e a câmera com a mola parada. Devolve 0 se [arena_ready] servir. */
+/* [world_init] Monta o corpo no spawn, o apron de [map_at] na slice de [arena_level], o checkpoint no spawn, o shuttle em x 464 e a câmera com a mola parada. Devolve 0 se [arena_ready] servir. */
 int world_init(void)
 {
     arena_slice slice;
@@ -1002,6 +1098,9 @@ int world_init(void)
     cp_x = cp_cell_x + 1;
     cp_cell_y = cp_x + 1;
     cp_y = cp_cell_y + 1;
+    shuttle_x = cp_y + 1;
+    shuttle_dir = shuttle_x + 1;
+    shuttle_rider = shuttle_dir + 1;
     *life = LIFE_PLAY;
     *dead_hold = 0;
     row_count = 1;
@@ -1009,11 +1108,12 @@ int world_init(void)
         return 1;
     }
     mark_spawn();
+    shuttle_snap();
     body_place();
     return 0;
 }
 
-/* [world_reset] Devolve o checkpoint ao spawn, recarrega o apron e põe o corpo lá. */
+/* [world_reset] Devolve o checkpoint ao spawn, recarrega o apron, encosta o shuttle em x 464 e põe o corpo lá. */
 void world_reset(void)
 {
     if (row_count < 1) {
@@ -1022,6 +1122,7 @@ void world_reset(void)
     mark_spawn();
     *life = LIFE_PLAY;
     *dead_hold = 0;
+    shuttle_snap();
     body_place();
 }
 
@@ -1092,12 +1193,46 @@ static int body_fallen(void)
     return cam_feet() > (PIT_Y << WORLD_SUB);
 }
 
-/* [world_tick] Integra um tick fixo. move_down solta o latch e atravessa o one-way. O pit e o spike abrem 252 ms de morte e depois [body_place_at] no checkpoint. A saída congela até [world_reset]. A mola e [body_pose] só correm vivo. */
+/* [shuttle_step] Avança o ping-pong e prende nas pontas. Devolve o dx deste tick. */
+static int shuttle_step(void)
+{
+    int prev;
+    int x;
+
+    prev = *shuttle_x;
+    x = prev + (*shuttle_dir) * SHUTTLE_SPEED;
+    if (x >= SHUTTLE_X1) {
+        x = SHUTTLE_X1;
+        *shuttle_dir = -1;
+    } else if (x <= SHUTTLE_X0) {
+        x = SHUTTLE_X0;
+        *shuttle_dir = 1;
+    }
+    *shuttle_x = x;
+    return x - prev;
+}
+
+/* [body_carry] Soma dx ao corpo se o rider do tick anterior vale. */
+static void body_carry(int dx)
+{
+    int x;
+
+    if (shuttle_rider == 0 || !*shuttle_rider || dx == 0) {
+        return;
+    }
+    x = compose_sub(row_cell_x[0], row_x[0]) + dx;
+    split_sub(x, &row_cell_x[0], &row_x[0]);
+}
+
+/* [world_tick] Integra um tick fixo. [shuttle_step] corre sempre. O rider soma esse dx antes das solves. move_down solta o latch e atravessa o one-way. O pit e o spike abrem 252 ms de morte e depois [body_place_at] no checkpoint. A saída congela o corpo até [world_reset]. A mola e [body_pose] só correm vivo. */
 void world_tick(const actions *input)
 {
+    int dx;
+
     if (row_count < 1 || input == 0) {
         return;
     }
+    dx = shuttle_step();
     if (*life == LIFE_DONE) {
         return;
     }
@@ -1117,6 +1252,7 @@ void world_tick(const actions *input)
     body_run(input);
     body_gravity(input);
     body_slide();
+    body_carry(dx);
     body_solve_x(input);
     body_solve_y(input);
     if (body_fallen() || apron_hits(MAP_SPIKE)) {
@@ -1336,4 +1472,20 @@ void world_checkpoint_rect(int *x, int *y, int *w, int *h)
 void world_exit_rect(int *x, int *y, int *w, int *h)
 {
     kind_rect(MAP_EXIT, x, y, w, h);
+}
+
+/* [world_shuttle_rect] Escreve o shuttle em pixels do mundo. */
+void world_shuttle_rect(int *x, int *y, int *w, int *h)
+{
+    if (shuttle_x == 0) {
+        *x = 0;
+        *y = 0;
+        *w = 0;
+        *h = 0;
+        return;
+    }
+    *x = sub_to_px(*shuttle_x);
+    *y = MAP_FLOOR_Y;
+    *w = SHUTTLE_W;
+    *h = SHUTTLE_H;
 }
