@@ -78,12 +78,94 @@ unsigned long g_sim_ms;
 int g_fps = -1;
 unsigned long g_fps_ms;
 int g_fps_frames;
+int g_debug;
+#ifdef PLATFORM_NATIVE
+int g_prev_grave;
+int g_prev_r;
+#endif
 
-/* [sim_advance] Gasta o delta em ticks de 16 ms de [world_tick], no máximo 4. */
+/* [floor_div] Divide a por b para baixo. b é positivo. */
+int floor_div(int a, int b)
+{
+    int q;
+
+    q = a / b;
+    if (a < 0 && a % b != 0) {
+        q -= 1;
+    }
+    return q;
+}
+
+/* [clip_view] Recorta o retângulo do mundo à View da câmera. Devolve 0 se a área some. */
+int clip_view(int cam_x, int cam_y, int *x, int *y, int *w, int *h)
+{
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+
+    x0 = *x;
+    y0 = *y;
+    x1 = *x + *w;
+    y1 = *y + *h;
+    if (x0 < cam_x) {
+        x0 = cam_x;
+    }
+    if (y0 < cam_y) {
+        y0 = cam_y;
+    }
+    if (x1 > cam_x + WORLD_VIEW) {
+        x1 = cam_x + WORLD_VIEW;
+    }
+    if (y1 > cam_y + WORLD_VIEW) {
+        y1 = cam_y + WORLD_VIEW;
+    }
+    if (x1 <= x0 || y1 <= y0) {
+        return 0;
+    }
+    *x = x0;
+    *y = y0;
+    *w = x1 - x0;
+    *h = y1 - y0;
+    return 1;
+}
+
+/* [host_edges] Lê o reset e o debug uma vez por update, antes dos ticks. */
+void host_edges(void)
+{
+#ifdef PLATFORM_NATIVE
+    const Uint8 *keys;
+    int grave;
+    int reset;
+
+    SDL_PumpEvents();
+    keys = SDL_GetKeyboardState(nullptr);
+    grave = keys[SDL_SCANCODE_GRAVE] != 0;
+    reset = keys[SDL_SCANCODE_R] != 0;
+    if (grave && !g_prev_grave) {
+        g_debug = !g_debug;
+    }
+    if (reset && !g_prev_r) {
+        world_reset();
+    }
+    g_prev_grave = grave;
+    g_prev_r = reset;
+#else
+    if (pad_link_take_reset()) {
+        world_reset();
+    }
+    if (pad_link_take_debug()) {
+        g_debug = !g_debug;
+    }
+#endif
+}
+
+/* [sim_advance] Lê [host_edges] e gasta o delta em ticks de 16 ms de [world_tick], no máximo 4. */
 void sim_advance(unsigned long delta_time)
 {
     int steps;
 
+    host_edges();
     g_sim_ms += delta_time;
     steps = 0;
     while (g_sim_ms >= 16 && steps < 4) {
@@ -124,22 +206,27 @@ public:
         note_frame(delta_time);
     }
 
-    /* [rect_scene::draw] Pinta o ground, os sólidos, o Rect, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No device a cor do ground vem de [link_ground]. */
+    /* [rect_scene::draw] Pinta o ground, os sólidos e o Rect no offset da câmera. Com o debug, o wireframe das células, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No device a cor do ground vem de [link_ground]. */
     void draw(pixelroot32::graphics::Renderer &renderer) override
     {
         int x;
         int y;
         int w;
         int h;
+        int cam_x;
+        int cam_y;
         int count;
         int i;
 
-        world_rect(&x, &y, &w, &h);
+        world_camera(&cam_x, &cam_y);
+        renderer.setOffsetBypass(true);
 #ifdef PLATFORM_NATIVE
         renderer.drawFilledRectangle(0, 0, WORLD_VIEW, WORLD_VIEW, pixelroot32::graphics::Color::DarkGreen);
 #else
         renderer.drawFilledRectangleW(0, 0, WORLD_VIEW, WORLD_VIEW, link_ground());
 #endif
+        renderer.setOffsetBypass(false);
+        renderer.setDisplayOffset(-cam_x, -cam_y);
         count = world_solid_count();
         for (i = 0; i < count; i++) {
             int sx;
@@ -148,9 +235,37 @@ public:
             int sh;
 
             world_solid_rect(i, &sx, &sy, &sw, &sh);
-            renderer.drawFilledRectangle(sx, sy, sw, sh, pixelroot32::graphics::Color::Black);
+            if (clip_view(cam_x, cam_y, &sx, &sy, &sw, &sh)) {
+                renderer.drawFilledRectangle(sx, sy, sw, sh, pixelroot32::graphics::Color::Black);
+            }
         }
-        renderer.drawFilledRectangle(x, y, w, h, pixelroot32::graphics::Color::White);
+        world_rect(&x, &y, &w, &h);
+        if (clip_view(cam_x, cam_y, &x, &y, &w, &h)) {
+            renderer.drawFilledRectangle(x, y, w, h, pixelroot32::graphics::Color::White);
+        }
+        if (g_debug) {
+            int x0;
+            int y0;
+            int x1;
+            int y1;
+            int cx;
+            int cy;
+
+            x0 = floor_div(cam_x, WORLD_VIEW);
+            x1 = floor_div(cam_x + WORLD_VIEW - 1, WORLD_VIEW);
+            y0 = floor_div(cam_y, WORLD_VIEW);
+            y1 = floor_div(cam_y + WORLD_VIEW - 1, WORLD_VIEW);
+            for (cy = y0; cy <= y1; cy++) {
+                for (cx = x0; cx <= x1; cx++) {
+                    renderer.drawRectangle(cx * WORLD_VIEW, cy * WORLD_VIEW, WORLD_VIEW, WORLD_VIEW,
+                                           pixelroot32::graphics::Color::White);
+                }
+            }
+        }
+        renderer.setOffsetBypass(true);
+        if (!g_debug) {
+            return;
+        }
 #ifndef PLATFORM_NATIVE
         {
             const int pct = battery_percent();

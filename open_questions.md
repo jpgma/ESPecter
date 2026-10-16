@@ -666,6 +666,16 @@ support a decision. Keep links to the detailed agent report.
   2026-10-15   Static AABBs, cap 32, in the level slice.    architecture.md                  medium       The cage feel is retuned
                Four faces use the latch, floor, and
                ceiling. The sweep stops on the crossed face
+  2026-10-15   Positions are a 240 cell plus a local     architecture.md                  medium       The cell camera or the
+               offset. No view borders. Solids cap 256.                           platform bands change
+               One 17-cell floor. world_reset re-rolls
+               four platforms. The camera slides to the
+               body-center cell. PLUS toggles debug.
+               One BOOT resets the world; two within
+               400 ms reset Pad Emu
+  2026-10-16   The camera springs toward the body center. architecture.md                  medium       The spring tune changes
+               A twelfth of the gap joins the velocity;
+               six eighths of it remains
 
 ## 7. Research execution plan
 

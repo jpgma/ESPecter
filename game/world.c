@@ -12,19 +12,29 @@
 #define WORLD_FALL_MAX 2048
 #define WORLD_SLIDE_MAX 256
 #define WORLD_WALL_JUMP 2000
-#define WORLD_COLS 12
-#define SOLID_CAP 32
-#define SOLID_COLS 4
+#define WORLD_COLS 14
+#define WORLD_CAM_STIFF 12
+#define WORLD_CAM_DAMP_NUM 6
+#define WORLD_CAM_DAMP_DEN 8
+#define WORLD_SPAN (WORLD_VIEW << WORLD_SUB)
+#define SOLID_CAP 256
+#define SOLID_COLS 6
+#define SOLID_USED 5
+#define PLAY_H 16
+#define LANE_L 96
+#define LANE_R 144
+#define RIGHT_END 232
+#define LOW_TOP_LO 176
+#define LOW_TOP_HI 200
+#define MID_GAP_LO 32
+#define MID_GAP_HI 56
+#define GROUND_CELL_X (-8)
+#define GROUND_Y 224
+#define GROUND_W (17 * WORLD_VIEW)
+#define GROUND_H 32
 
-/* Degraus, teto e pilar. A coluna x 112–128 fica vazia. */
-static const int solid_px[] = {
-    16, 184, 64, 16,
-    16, 96, 64, 16,
-    136, 176, 32, 16,
-    176, 64, 24, 128
-};
-
-#define SOLID_N ((int)(sizeof solid_px / sizeof solid_px[0] / 4))
+static const int low_widths[] = {40, 56, 72};
+static const int mid_widths[] = {32, 48};
 
 static int *row_x;
 static int *row_y;
@@ -38,7 +48,16 @@ static int *row_hit_floor;
 static int *row_hit_ceil;
 static int *row_jump_was;
 static int *row_wall;
+static int *row_cell_x;
+static int *row_cell_y;
 static int row_count;
+static int *cam_x;
+static int *cam_y;
+static int *cam_vx;
+static int *cam_vy;
+static int *roll_state;
+static int *solid_cx;
+static int *solid_cy;
 static int *solid_x;
 static int *solid_y;
 static int *solid_w;
@@ -51,13 +70,37 @@ static int range_overlaps(int a0, int a1, int b0, int b1)
     return a0 < b1 && b0 < a1;
 }
 
-/* [solid_box] Escreve o AABB index em subpixels. */
+/* [compose_sub] Junta a célula e o local no subpixel do mundo. */
+static int compose_sub(int cell, int local)
+{
+    return cell * WORLD_SPAN + local;
+}
+
+/* [split_sub] Separa o subpixel composto na célula e no local de [0, 240<<8). */
+static void split_sub(int composed, int *cell, int *local)
+{
+    int next;
+
+    next = composed / WORLD_SPAN;
+    if (composed < 0 && composed % WORLD_SPAN != 0) {
+        next -= 1;
+    }
+    *cell = next;
+    *local = composed - next * WORLD_SPAN;
+}
+
+/* [solid_box] Escreve o AABB index em subpixels do mundo. */
 static void solid_box(int index, int *left, int *top, int *right, int *bottom)
 {
-    *left = solid_x[index] << WORLD_SUB;
-    *top = solid_y[index] << WORLD_SUB;
-    *right = (solid_x[index] + solid_w[index]) << WORLD_SUB;
-    *bottom = (solid_y[index] + solid_h[index]) << WORLD_SUB;
+    int x;
+    int y;
+
+    x = solid_cx[index] * WORLD_VIEW + solid_x[index];
+    y = solid_cy[index] * WORLD_VIEW + solid_y[index];
+    *left = x << WORLD_SUB;
+    *top = y << WORLD_SUB;
+    *right = (x + solid_w[index]) << WORLD_SUB;
+    *bottom = (y + solid_h[index]) << WORLD_SUB;
 }
 
 /* [axis_out] Devolve a posição que sai pela face mais curta. side recebe 1 na mínima e -1 na máxima. */
@@ -141,12 +184,6 @@ static void body_embed(int horizontal, int fixed, int fixed_size, int move_size,
     }
 }
 
-/* [body_span] Devolve o maior subpixel em que o Rect cabe na View. */
-static int body_span(void)
-{
-    return (WORLD_VIEW - WORLD_RECT) << WORLD_SUB;
-}
-
 /* [body_latched] Devolve 1 se o latch de parede segura o corpo. */
 static int body_latched(void)
 {
@@ -222,10 +259,9 @@ static void body_slide(void)
     }
 }
 
-/* [body_stop_x] Devolve o x na primeira face vertical cruzada. hit recebe -1, 1 ou 0. */
+/* [body_stop_x] Devolve o x composto na primeira face vertical cruzada. hit recebe -1, 1 ou 0. */
 static int body_stop_x(int x0, int dest, int y, int bw, int bh, int *hit)
 {
-    int span;
     int best;
     int i;
     int left;
@@ -234,16 +270,8 @@ static int body_stop_x(int x0, int dest, int y, int bw, int bh, int *hit)
     int bottom;
     int face;
 
-    span = body_span();
     *hit = 0;
     best = dest;
-    if (best < 0) {
-        best = 0;
-        *hit = -1;
-    } else if (best > span) {
-        best = span;
-        *hit = 1;
-    }
     for (i = 0; i < solid_count; i++) {
         if (solid_w[i] <= 0 || solid_h[i] <= 0) {
             continue;
@@ -267,20 +295,12 @@ static int body_stop_x(int x0, int dest, int y, int bw, int bh, int *hit)
         }
     }
     body_embed(1, y, bh, bw, &best, hit);
-    if (best < 0) {
-        best = 0;
-        *hit = -1;
-    } else if (best > span) {
-        best = span;
-        *hit = 1;
-    }
     return best;
 }
 
-/* [body_stop_y] Devolve o y na primeira face horizontal cruzada. hit recebe -1 teto, 1 chão ou 0. */
+/* [body_stop_y] Devolve o y composto na primeira face horizontal cruzada. hit recebe -1 teto, 1 chão ou 0. */
 static int body_stop_y(int y0, int dest, int x, int bw, int bh, int *hit)
 {
-    int span;
     int best;
     int i;
     int left;
@@ -289,16 +309,8 @@ static int body_stop_y(int y0, int dest, int x, int bw, int bh, int *hit)
     int bottom;
     int face;
 
-    span = body_span();
     *hit = 0;
     best = dest;
-    if (best < 0) {
-        best = 0;
-        *hit = -1;
-    } else if (best > span) {
-        best = span;
-        *hit = 1;
-    }
     for (i = 0; i < solid_count; i++) {
         if (solid_w[i] <= 0 || solid_h[i] <= 0) {
             continue;
@@ -322,17 +334,10 @@ static int body_stop_y(int y0, int dest, int x, int bw, int bh, int *hit)
         }
     }
     body_embed(0, x, bw, bh, &best, hit);
-    if (best < 0) {
-        best = 0;
-        *hit = -1;
-    } else if (best > span) {
-        best = span;
-        *hit = 1;
-    }
     return best;
 }
 
-/* [body_on_latch] Devolve 1 se um subpixel contra o muro ainda cruza uma face ou a borda. */
+/* [body_on_latch] Devolve 1 se um subpixel contra o muro ainda cruza uma face. */
 static int body_on_latch(void)
 {
     int side;
@@ -341,7 +346,6 @@ static int body_on_latch(void)
     int bw;
     int bh;
     int probe;
-    int span;
     int i;
     int left;
     int top;
@@ -352,20 +356,13 @@ static int body_on_latch(void)
     if (side == 0) {
         return 0;
     }
-    x = row_x[0];
-    y = row_y[0];
+    x = compose_sub(row_cell_x[0], row_x[0]);
+    y = compose_sub(row_cell_y[0], row_y[0]);
     bw = row_w[0] << WORLD_SUB;
     bh = row_h[0] << WORLD_SUB;
-    span = body_span();
     if (side < 0) {
-        if (x <= 0) {
-            return 1;
-        }
         probe = x - 1;
     } else {
-        if (x >= span) {
-            return 1;
-        }
         probe = x + 1;
     }
     for (i = 0; i < solid_count; i++) {
@@ -381,21 +378,23 @@ static int body_on_latch(void)
     return 0;
 }
 
-/* [body_solve_x] Soma vx, projeta nas faces verticais e grava o latch. */
+/* [body_solve_x] Soma vx, projeta nas faces verticais, grava o latch e separa a célula. */
 static void body_solve_x(const actions *input)
 {
     int x0;
+    int y0;
     int bw;
     int bh;
     int hit;
     int x;
 
-    x0 = row_x[0];
+    x0 = compose_sub(row_cell_x[0], row_x[0]);
+    y0 = compose_sub(row_cell_y[0], row_y[0]);
     bw = row_w[0] << WORLD_SUB;
     bh = row_h[0] << WORLD_SUB;
     row_hit_left[0] = 0;
     row_hit_right[0] = 0;
-    x = body_stop_x(x0, x0 + row_vx[0], row_y[0], bw, bh, &hit);
+    x = body_stop_x(x0, x0 + row_vx[0], y0, bw, bh, &hit);
     if (hit != 0) {
         row_vx[0] = 0;
         if (hit < 0) {
@@ -410,25 +409,27 @@ static void body_solve_x(const actions *input)
             }
         }
     }
-    row_x[0] = x;
+    split_sub(x, &row_cell_x[0], &row_x[0]);
 }
 
-/* [body_solve_y] Soma vy, projeta nas faces horizontais, e o chão ou a saída do muro solta o latch. */
+/* [body_solve_y] Soma vy, projeta nas faces horizontais, separa a célula, e o chão ou a saída do muro solta o latch. */
 static void body_solve_y(void)
 {
+    int x0;
     int y0;
     int bw;
     int bh;
     int hit;
     int y;
 
-    y0 = row_y[0];
+    x0 = compose_sub(row_cell_x[0], row_x[0]);
+    y0 = compose_sub(row_cell_y[0], row_y[0]);
     bw = row_w[0] << WORLD_SUB;
     bh = row_h[0] << WORLD_SUB;
     row_hit_floor[0] = 0;
     row_hit_ceil[0] = 0;
-    y = body_stop_y(y0, y0 + row_vy[0], row_x[0], bw, bh, &hit);
-    row_y[0] = y;
+    y = body_stop_y(y0, y0 + row_vy[0], x0, bw, bh, &hit);
+    split_sub(y, &row_cell_y[0], &row_y[0]);
     if (hit > 0) {
         row_vy[0] = 0;
         row_hit_floor[0] = 1;
@@ -463,15 +464,149 @@ static void body_jump(const actions *input)
     row_jump_was[0] = input->jump ? 1 : 0;
 }
 
-/* [solid_load] Copia os AABB de prova para a slice de [arena_level]. Devolve 0 se couberem. */
+/* [cam_target] Devolve a origem da View que põe o centro do corpo no centro da View. */
+static int cam_target(int cell, int local)
+{
+    int center;
+
+    center = compose_sub(cell, local) + ((WORLD_RECT / 2) << WORLD_SUB);
+    return center - ((WORLD_VIEW / 2) << WORLD_SUB);
+}
+
+/* [cam_axis] Integra um eixo da mola até o alvo. */
+static void cam_axis(int *pos, int *vel, int target)
+{
+    *vel += (target - *pos) / WORLD_CAM_STIFF;
+    *vel = *vel * WORLD_CAM_DAMP_NUM / WORLD_CAM_DAMP_DEN;
+    *pos += *vel;
+}
+
+/* [cam_spring] Puxa a origem da View para deixar o corpo no centro, com folga e retorno. */
+static void cam_spring(void)
+{
+    cam_axis(cam_x, cam_vx, cam_target(row_cell_x[0], row_x[0]));
+    cam_axis(cam_y, cam_vy, cam_target(row_cell_y[0], row_y[0]));
+}
+
+/* [body_place] Põe o corpo no centro da célula 0, zerado, e encosta a câmera com a mola parada. */
+static void body_place(void)
+{
+    int origin;
+
+    origin = ((WORLD_VIEW - WORLD_RECT) / 2) << WORLD_SUB;
+    row_cell_x[0] = 0;
+    row_cell_y[0] = 0;
+    row_x[0] = origin;
+    row_y[0] = origin;
+    row_w[0] = WORLD_RECT;
+    row_h[0] = WORLD_RECT;
+    row_vx[0] = 0;
+    row_vy[0] = 0;
+    row_hit_left[0] = 0;
+    row_hit_right[0] = 0;
+    row_hit_floor[0] = 0;
+    row_hit_ceil[0] = 0;
+    row_jump_was[0] = 0;
+    row_wall[0] = 0;
+    *cam_x = 0;
+    *cam_y = 0;
+    *cam_vx = 0;
+    *cam_vy = 0;
+}
+
+/* [roll_next] Avança o LCG da slice e devolve 15 bits. */
+static int roll_next(void)
+{
+    unsigned int state;
+
+    state = (unsigned int)*roll_state;
+    state = state * 1103515245u + 12345u;
+    *roll_state = (int)state;
+    return (int)((state >> 16) & 0x7fffu);
+}
+
+/* [roll_pick] Devolve um inteiro em [lo, hi]. */
+static int roll_pick(int lo, int hi)
+{
+    if (hi <= lo) {
+        return lo;
+    }
+    return lo + roll_next() % (hi - lo + 1);
+}
+
+/* [roll_width] Devolve uma largura da tabela. */
+static int roll_width(const int *table, int count)
+{
+    return table[roll_next() % count];
+}
+
+/* [solid_put] Grava o AABB index na célula e no local em pixels. */
+static void solid_put(int index, int cell_x, int cell_y, int x, int y, int w, int h)
+{
+    solid_cx[index] = cell_x;
+    solid_cy[index] = cell_y;
+    solid_x[index] = x;
+    solid_y[index] = y;
+    solid_w[index] = w;
+    solid_h[index] = h;
+}
+
+/* [solid_over] Devolve o x do médio que cobre parte do baixo e fica fora do corredor. */
+static int solid_over(int low_x, int low_w, int width, int min_x, int max_edge)
+{
+    int lo;
+    int hi;
+
+    lo = low_x - width + 1;
+    if (lo < min_x) {
+        lo = min_x;
+    }
+    hi = low_x + low_w - 1;
+    if (hi > max_edge - width) {
+        hi = max_edge - width;
+    }
+    return roll_pick(lo, hi);
+}
+
+/* [solid_roll] Sorteia as quatro plataformas na célula 0, fora do corredor x 96–144. */
+static void solid_roll(void)
+{
+    int lw;
+    int rw;
+    int lx;
+    int rx;
+    int ly;
+    int ry;
+    int mw;
+    int gap;
+
+    lw = roll_width(low_widths, 3);
+    lx = roll_pick(0, LANE_L - lw);
+    ly = roll_pick(LOW_TOP_LO, LOW_TOP_HI);
+    solid_put(1, 0, 0, lx, ly, lw, PLAY_H);
+
+    rw = roll_width(low_widths, 3);
+    rx = roll_pick(LANE_R, RIGHT_END - rw);
+    ry = roll_pick(LOW_TOP_LO, LOW_TOP_HI);
+    solid_put(2, 0, 0, rx, ry, rw, PLAY_H);
+
+    mw = roll_width(mid_widths, 2);
+    gap = roll_pick(MID_GAP_LO, MID_GAP_HI);
+    solid_put(3, 0, 0, solid_over(lx, lw, mw, 0, LANE_L), ly - gap, mw, PLAY_H);
+
+    mw = roll_width(mid_widths, 2);
+    gap = roll_pick(MID_GAP_LO, MID_GAP_HI);
+    solid_put(4, 0, 0, solid_over(rx, rw, mw, LANE_R, RIGHT_END), ry - gap, mw, PLAY_H);
+}
+
+/* [solid_load] Grava o chão na slice de [arena_level] e chama [solid_roll]. Devolve 0 se couberem. */
 static int solid_load(void)
 {
     arena_slice slice;
     int *rows;
     size_t need;
-    int i;
 
-    if (SOLID_N > SOLID_CAP) {
+    if (SOLID_USED > SOLID_CAP) {
         return 1;
     }
     slice = arena_level();
@@ -480,33 +615,30 @@ static int solid_load(void)
         return 1;
     }
     rows = (int *)slice.data;
-    solid_x = rows;
-    solid_y = rows + SOLID_CAP;
-    solid_w = rows + SOLID_CAP * 2;
-    solid_h = rows + SOLID_CAP * 3;
-    for (i = 0; i < SOLID_N; i++) {
-        solid_x[i] = solid_px[i * 4];
-        solid_y[i] = solid_px[i * 4 + 1];
-        solid_w[i] = solid_px[i * 4 + 2];
-        solid_h[i] = solid_px[i * 4 + 3];
-    }
-    solid_count = SOLID_N;
+    solid_cx = rows;
+    solid_cy = rows + SOLID_CAP;
+    solid_x = rows + SOLID_CAP * 2;
+    solid_y = rows + SOLID_CAP * 3;
+    solid_w = rows + SOLID_CAP * 4;
+    solid_h = rows + SOLID_CAP * 5;
+    solid_put(0, GROUND_CELL_X, 0, 0, GROUND_Y, GROUND_W, GROUND_H);
+    solid_count = SOLID_USED;
+    solid_roll();
     return 0;
 }
 
-/* [world_init] Monta o corpo no centro da slice de [arena_world] e copia os sólidos para a slice de [arena_level]. Devolve 0 se [arena_ready] servir. */
+/* [world_init] Monta o corpo no centro da célula 0, o chão e as plataformas na slice de [arena_level], e a câmera centrada com a mola parada. Devolve 0 se [arena_ready] servir. */
 int world_init(void)
 {
     arena_slice slice;
     int *rows;
     size_t need;
-    int origin;
 
     if (!arena_ready()) {
         return 1;
     }
     slice = arena_world();
-    need = (size_t)WORLD_CAP * (size_t)WORLD_COLS * sizeof(int);
+    need = (size_t)WORLD_CAP * (size_t)WORLD_COLS * sizeof(int) + 5u * sizeof(int);
     if (slice.data == 0 || slice.size < need) {
         return 1;
     }
@@ -523,24 +655,33 @@ int world_init(void)
     row_hit_ceil = rows + WORLD_CAP * 9;
     row_jump_was = rows + WORLD_CAP * 10;
     row_wall = rows + WORLD_CAP * 11;
+    row_cell_x = rows + WORLD_CAP * 12;
+    row_cell_y = rows + WORLD_CAP * 13;
+    cam_x = rows + WORLD_CAP * WORLD_COLS;
+    cam_y = cam_x + 1;
+    cam_vx = cam_y + 1;
+    cam_vy = cam_vx + 1;
+    roll_state = cam_vy + 1;
+    *roll_state = 1;
     row_count = 1;
-    origin = ((WORLD_VIEW - WORLD_RECT) / 2) << WORLD_SUB;
-    row_x[0] = origin;
-    row_y[0] = origin;
-    row_w[0] = WORLD_RECT;
-    row_h[0] = WORLD_RECT;
-    row_vx[0] = 0;
-    row_vy[0] = 0;
-    row_hit_left[0] = 0;
-    row_hit_right[0] = 0;
-    row_hit_floor[0] = 0;
-    row_hit_ceil[0] = 0;
-    row_jump_was[0] = 0;
-    row_wall[0] = 0;
-    return solid_load();
+    if (solid_load() != 0) {
+        return 1;
+    }
+    body_place();
+    return 0;
 }
 
-/* [world_tick] Integra um tick fixo; move_down solta o latch antes da corrida. */
+/* [world_reset] Re-rola as quatro plataformas, devolve o corpo ao centro da célula 0 e encosta a câmera. */
+void world_reset(void)
+{
+    if (row_count < 1) {
+        return;
+    }
+    solid_roll();
+    body_place();
+}
+
+/* [world_tick] Integra um tick fixo; move_down solta o latch antes da corrida e a mola da câmera segue o centro do corpo. */
 void world_tick(const actions *input)
 {
     if (row_count < 1 || input == 0) {
@@ -555,9 +696,10 @@ void world_tick(const actions *input)
     body_solve_x(input);
     body_solve_y();
     body_jump(input);
+    cam_spring();
 }
 
-/* [world_rect] Escreve a posição em pixels e o tamanho do Rect. */
+/* [world_rect] Escreve a posição no mundo, em pixels, e o tamanho do Rect. */
 void world_rect(int *x, int *y, int *w, int *h)
 {
     if (row_count < 1) {
@@ -567,19 +709,31 @@ void world_rect(int *x, int *y, int *w, int *h)
         *h = 0;
         return;
     }
-    *x = row_x[0] >> WORLD_SUB;
-    *y = row_y[0] >> WORLD_SUB;
+    *x = row_cell_x[0] * WORLD_VIEW + (row_x[0] >> WORLD_SUB);
+    *y = row_cell_y[0] * WORLD_VIEW + (row_y[0] >> WORLD_SUB);
     *w = row_w[0];
     *h = row_h[0];
 }
 
-/* [world_solid_count] Devolve quantos AABB estáticos [world_init] copiou. */
+/* [world_camera] Escreve a origem da View em pixels do mundo. */
+void world_camera(int *x, int *y)
+{
+    if (cam_x == 0) {
+        *x = 0;
+        *y = 0;
+        return;
+    }
+    *x = *cam_x >> WORLD_SUB;
+    *y = *cam_y >> WORLD_SUB;
+}
+
+/* [world_solid_count] Devolve quantos AABB estáticos a slice guarda. */
 int world_solid_count(void)
 {
     return solid_count;
 }
 
-/* [world_solid_rect] Escreve o AABB index em pixels. Fora da contagem, zera a saída. */
+/* [world_solid_rect] Escreve o AABB index em pixels do mundo. Fora da contagem, zera a saída. */
 void world_solid_rect(int index, int *x, int *y, int *w, int *h)
 {
     if (index < 0 || index >= solid_count) {
@@ -589,8 +743,8 @@ void world_solid_rect(int index, int *x, int *y, int *w, int *h)
         *h = 0;
         return;
     }
-    *x = solid_x[index];
-    *y = solid_y[index];
+    *x = solid_cx[index] * WORLD_VIEW + solid_x[index];
+    *y = solid_cy[index] * WORLD_VIEW + solid_y[index];
     *w = solid_w[index];
     *h = solid_h[index];
 }

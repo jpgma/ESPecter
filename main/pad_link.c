@@ -45,6 +45,12 @@ static int s_drop;
 static int s_boot_armed;
 static int s_boot_down;
 static int s_boot_stable;
+static int s_boot_wait;
+static int s_plus_armed;
+static int s_plus_down;
+static int s_plus_stable;
+static int s_reset_edge;
+static int s_debug_edge;
 static uint16_t s_svc_start;
 static uint16_t s_svc_end;
 static uint16_t s_val_handle;
@@ -88,6 +94,38 @@ void pad_link_read(pad_view *out)
     portENTER_CRITICAL(&s_lock);
     *out = s_view;
     portEXIT_CRITICAL(&s_lock);
+}
+
+/* [mark_edge] Liga o edge no mailbox. */
+static void mark_edge(int *edge)
+{
+    portENTER_CRITICAL(&s_lock);
+    *edge = 1;
+    portEXIT_CRITICAL(&s_lock);
+}
+
+/* [take_edge] Devolve o edge uma vez e zera. */
+static int take_edge(int *edge)
+{
+    int value;
+
+    portENTER_CRITICAL(&s_lock);
+    value = *edge;
+    *edge = 0;
+    portEXIT_CRITICAL(&s_lock);
+    return value;
+}
+
+/* [pad_link_take_debug] Devolve 1 uma vez quando o PLUS foi aceito. */
+int pad_link_take_debug(void)
+{
+    return take_edge(&s_debug_edge);
+}
+
+/* [pad_link_take_reset] Devolve 1 uma vez quando um BOOT sozinho fechou a espera. */
+int pad_link_take_reset(void)
+{
+    return take_edge(&s_reset_edge);
 }
 
 /* [store_report] Grava buttons e hat no mailbox. */
@@ -432,7 +470,7 @@ static void on_sync(void)
     start_scan();
 }
 
-/* [boot_cb] Termina o link do Pad Emu e deixa [start_scan] recomeçar. */
+/* [boot_cb] No segundo BOOT, termina o link do Pad Emu e deixa [start_scan] recomeçar. */
 static void boot_cb(struct ble_npl_event *ev)
 {
     (void)ev;
@@ -459,7 +497,7 @@ static void boot_cb(struct ble_npl_event *ev)
     start_scan();
 }
 
-/* [boot_scan] Debounce do BOOT e arma o callout de [boot_cb]. */
+/* [boot_scan] Debounce do BOOT. O segundo toque em 400 ms arma [boot_cb]; um toque só marca o reset do mundo. */
 static void boot_scan(void)
 {
     int pressed;
@@ -474,34 +512,73 @@ static void boot_scan(void)
     if (!pressed) {
         s_boot_stable = 0;
         s_boot_down = 0;
-        return;
+    } else {
+        if (s_boot_stable < 2) {
+            s_boot_stable++;
+        }
+        if (s_boot_stable >= 2 && !s_boot_down) {
+            s_boot_down = 1;
+            if (s_boot_wait > 0) {
+                s_boot_wait = 0;
+                ble_npl_callout_reset(&s_boot, 0);
+                return;
+            }
+            s_boot_wait = 20;
+            return;
+        }
     }
-    if (s_boot_stable < 2) {
-        s_boot_stable++;
+    if (s_boot_wait > 0) {
+        s_boot_wait--;
+        if (s_boot_wait == 0) {
+            mark_edge(&s_reset_edge);
+        }
     }
-    if (s_boot_stable < 2 || s_boot_down) {
-        return;
-    }
-    s_boot_down = 1;
-    ble_npl_callout_reset(&s_boot, 0);
 }
 
-/* [boot_task] Chama [boot_scan] a cada 20 ms. */
+/* [plus_scan] Debounce do PLUS e marca o edge do debug. */
+static void plus_scan(void)
+{
+    int pressed;
+
+    pressed = gpio_get_level(GPIO_NUM_4) == 0;
+    if (!s_plus_armed) {
+        if (!pressed) {
+            s_plus_armed = 1;
+        }
+        return;
+    }
+    if (!pressed) {
+        s_plus_stable = 0;
+        s_plus_down = 0;
+        return;
+    }
+    if (s_plus_stable < 2) {
+        s_plus_stable++;
+    }
+    if (s_plus_stable < 2 || s_plus_down) {
+        return;
+    }
+    s_plus_down = 1;
+    mark_edge(&s_debug_edge);
+}
+
+/* [boot_task] Chama [boot_scan] e [plus_scan] a cada 20 ms. */
 static void boot_task(void *param)
 {
     (void)param;
     for (;;) {
         boot_scan();
+        plus_scan();
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 
-/* [boot_start] Configura o GPIO0 e sobe [boot_task]. */
+/* [boot_start] Configura o GPIO0 e o GPIO4 e sobe [boot_task]. */
 static void boot_start(void)
 {
     gpio_config_t key = {0};
 
-    key.pin_bit_mask = 1ull << GPIO_NUM_0;
+    key.pin_bit_mask = (1ull << GPIO_NUM_0) | (1ull << GPIO_NUM_4);
     key.mode = GPIO_MODE_INPUT;
     key.pull_up_en = GPIO_PULLUP_ENABLE;
     key.pull_down_en = GPIO_PULLDOWN_DISABLE;
@@ -521,7 +598,7 @@ static void host_task(void *param)
     nimble_port_freertos_deinit();
 }
 
-/* [pad_link_start] Sobe o NimBLE central, a task do BOOT e procura o Pad Emu. O NVS já está de pé por [nvs_start]. */
+/* [pad_link_start] Sobe o NimBLE central, a task do BOOT e do PLUS, e procura o Pad Emu. O NVS já está de pé por [nvs_start]. */
 void pad_link_start(void)
 {
     ESP_ERROR_CHECK(nimble_port_init());
