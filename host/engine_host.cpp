@@ -2,6 +2,7 @@
 
 #include "actions.h"
 #include "arena.h"
+#include "body_sheet.h"
 #include "world.h"
 
 #include "core/Engine.h"
@@ -130,6 +131,55 @@ int clip_view(int cam_x, int cam_y, int *x, int *y, int *w, int *h)
     return 1;
 }
 
+/* [box_hits_view] Devolve 1 se o Rect cruza a View. Não altera a origem. */
+int box_hits_view(int cam_x, int cam_y, int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0) {
+        return 0;
+    }
+    return x < cam_x + WORLD_VIEW && cam_x < x + w && y < cam_y + WORLD_VIEW && cam_y < y + h;
+}
+
+/* [draw_body] Desenha as quatro layers 1bpp de [world_body_pose] com os pés e o centro no AABB. */
+void draw_body(pixelroot32::graphics::Renderer &renderer, int cam_x, int cam_y)
+{
+    int x;
+    int y;
+    int w;
+    int h;
+    int clip;
+    int frame;
+    int face;
+    int layer;
+    const pixelroot32::graphics::Color colors[BODY_LAYER_COUNT] = {
+        pixelroot32::graphics::Color::LightGreen,
+        pixelroot32::graphics::Color::Cyan,
+        pixelroot32::graphics::Color::Orange,
+        pixelroot32::graphics::Color::Red,
+    };
+
+    world_rect(&x, &y, &w, &h);
+    x -= (BODY_SHEET_W - w) / 2;
+    y -= BODY_SHEET_H - h;
+    if (!box_hits_view(cam_x, cam_y, x, y, BODY_SHEET_W, BODY_SHEET_H)) {
+        return;
+    }
+    world_body_pose(&clip, &frame, &face);
+    for (layer = 0; layer < BODY_LAYER_COUNT; layer++) {
+        const uint16_t *rows;
+        pixelroot32::graphics::Sprite sprite;
+
+        rows = body_sheet_rows(clip, frame, layer);
+        if (rows == nullptr) {
+            continue;
+        }
+        sprite.data = rows;
+        sprite.width = BODY_SHEET_W;
+        sprite.height = BODY_SHEET_H;
+        renderer.drawSprite(sprite, x, y, colors[layer], face < 0);
+    }
+}
+
 /* [host_edges] Lê o reset e o debug uma vez por update, antes dos ticks. */
 void host_edges(void)
 {
@@ -206,13 +256,9 @@ public:
         note_frame(delta_time);
     }
 
-    /* [rect_scene::draw] Pinta o ground, os sólidos e o Rect no offset da câmera. Com o debug, o wireframe das células, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No device a cor do ground vem de [link_ground]. */
+    /* [rect_scene::draw] Pinta o ground, os sólidos e o corpo no offset da câmera. Com o debug, o wireframe das células, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No device a cor do ground vem de [link_ground]. */
     void draw(pixelroot32::graphics::Renderer &renderer) override
     {
-        int x;
-        int y;
-        int w;
-        int h;
         int cam_x;
         int cam_y;
         int count;
@@ -239,10 +285,7 @@ public:
                 renderer.drawFilledRectangle(sx, sy, sw, sh, pixelroot32::graphics::Color::Black);
             }
         }
-        world_rect(&x, &y, &w, &h);
-        if (clip_view(cam_x, cam_y, &x, &y, &w, &h)) {
-            renderer.drawFilledRectangle(x, y, w, h, pixelroot32::graphics::Color::White);
-        }
+        draw_body(renderer, cam_x, cam_y);
         if (g_debug) {
             int x0;
             int y0;

@@ -1,25 +1,32 @@
 #include "world.h"
 
 #include "arena.h"
+#include "body_sheet.h"
 
 #define WORLD_CAP 8
 #define WORLD_SUB 8
 #define WORLD_RUN_ACCEL 64
-#define WORLD_RUN_MAX 768
+#define WORLD_RUN_MAX 700
 #define WORLD_GRAVITY_RISE 128
 #define WORLD_GRAVITY_FALL 256
 #define WORLD_JUMP_VY (-2048)
 #define WORLD_FALL_MAX 2048
 #define WORLD_SLIDE_MAX 256
-#define WORLD_WALL_JUMP 2000
-#define WORLD_COLS 14
-#define WORLD_CAM_STIFF 12
-#define WORLD_CAM_DAMP_NUM 6
+#define WORLD_WALL_JUMP 1500
+#define WORLD_COLS 20
+#define BODY_ACT_NONE 0
+#define BODY_ACT_FLOOR 1
+#define BODY_ACT_WALL 2
+#define BODY_HOLD_SLOW 4
+#define BODY_HOLD_FAST 2
+#define WORLD_CAM_STIFF 2
+#define WORLD_CAM_DAMP_NUM 3
 #define WORLD_CAM_DAMP_DEN 8
+#define WORLD_CAM_FLOOR 32
 #define WORLD_SPAN (WORLD_VIEW << WORLD_SUB)
 #define SOLID_CAP 256
 #define SOLID_COLS 6
-#define SOLID_USED 5
+#define SOLID_USED 9
 #define PLAY_H 16
 #define LANE_L 96
 #define LANE_R 144
@@ -28,13 +35,22 @@
 #define LOW_TOP_HI 200
 #define MID_GAP_LO 32
 #define MID_GAP_HI 56
+#define WALL_W 16
+#define WALL_TOP_LO 8
+#define WALL_TOP_HI 24
+#define WALL_BOTTOM 200
+#define WALL_X_L_LO 64
+#define WALL_X_L_HI (LANE_L - WALL_W)
+#define WALL_X_R_LO LANE_R
+#define WALL_X_R_HI 160
+#define STACK_N 3
+#define STACK_TOP 8
 #define GROUND_CELL_X (-8)
 #define GROUND_Y 224
 #define GROUND_W (17 * WORLD_VIEW)
 #define GROUND_H 32
 
 static const int low_widths[] = {40, 56, 72};
-static const int mid_widths[] = {32, 48};
 
 static int *row_x;
 static int *row_y;
@@ -48,6 +64,12 @@ static int *row_hit_floor;
 static int *row_hit_ceil;
 static int *row_jump_was;
 static int *row_wall;
+static int *row_face;
+static int *row_clip;
+static int *row_frame;
+static int *row_hold;
+static int *row_act;
+static int *row_vx_was;
 static int *row_cell_x;
 static int *row_cell_y;
 static int row_count;
@@ -55,6 +77,7 @@ static int *cam_x;
 static int *cam_y;
 static int *cam_vx;
 static int *cam_vy;
+static int *cam_ground;
 static int *roll_state;
 static int *solid_cx;
 static int *solid_cy;
@@ -412,7 +435,21 @@ static void body_solve_x(const actions *input)
     split_sub(x, &row_cell_x[0], &row_x[0]);
 }
 
-/* [body_solve_y] Soma vy, projeta nas faces horizontais, separa a célula, e o chão ou a saída do muro solta o latch. */
+/* [cam_feet] Devolve o y dos pés em subpixels do mundo. */
+static int cam_feet(void)
+{
+    return compose_sub(row_cell_y[0], row_y[0]) + (row_h[0] << WORLD_SUB);
+}
+
+/* [cam_note_ground] Grava a linha dos pés quando [body_solve_y] marca o chão. */
+static void cam_note_ground(void)
+{
+    if (row_hit_floor[0]) {
+        *cam_ground = cam_feet();
+    }
+}
+
+/* [body_solve_y] Soma vy, projeta nas faces horizontais, separa a célula, solta o latch no chão ou na saída do muro, e o chão chama [cam_note_ground]. */
 static void body_solve_y(void)
 {
     int x0;
@@ -441,17 +478,20 @@ static void body_solve_y(void)
     if (row_wall[0] != 0 && !body_on_latch()) {
         row_wall[0] = 0;
     }
+    cam_note_ground();
 }
 
-/* [body_jump] Impulsiona no chão, ou na diagonal se o latch de [body_solve_x] vale. */
+/* [body_jump] Impulsiona no chão, ou na diagonal se o latch de [body_solve_x] vale, e grava o ato do tick. */
 static void body_jump(const actions *input)
 {
     int edge;
 
     edge = input->jump && !row_jump_was[0];
+    row_act[0] = BODY_ACT_NONE;
     if (edge && row_hit_floor[0]) {
         row_vy[0] = WORLD_JUMP_VY;
         row_hit_floor[0] = 0;
+        row_act[0] = BODY_ACT_FLOOR;
     } else if (edge && body_latched()) {
         if (row_wall[0] < 0) {
             row_vx[0] = WORLD_WALL_JUMP;
@@ -460,17 +500,248 @@ static void body_jump(const actions *input)
         }
         row_vy[0] = -WORLD_WALL_JUMP;
         row_wall[0] = 0;
+        row_act[0] = BODY_ACT_WALL;
     }
     row_jump_was[0] = input->jump ? 1 : 0;
 }
 
-/* [cam_target] Devolve a origem da View que põe o centro do corpo no centro da View. */
-static int cam_target(int cell, int local)
+/* [body_speed] Devolve o módulo de vx. */
+static int body_speed(void)
+{
+    if (row_vx[0] < 0) {
+        return -row_vx[0];
+    }
+    return row_vx[0];
+}
+
+/* [body_turned] Devolve 1 se vx trocou de sinal com os dois valores diferentes de zero. */
+static int body_turned(void)
+{
+    int prev;
+    int vx;
+
+    prev = row_vx_was[0];
+    vx = row_vx[0];
+    if (prev == 0 || vx == 0) {
+        return 0;
+    }
+    if ((prev > 0 && vx < 0) || (prev < 0 && vx > 0)) {
+        return 1;
+    }
+    return 0;
+}
+
+/* [body_face_now] A face olha para longe do muro no latch; senão segue o sinal de vx. */
+static void body_face_now(void)
+{
+    if (body_latched()) {
+        row_face[0] = -row_wall[0];
+        return;
+    }
+    if (row_vx[0] > 0) {
+        row_face[0] = 1;
+    } else if (row_vx[0] < 0) {
+        row_face[0] = -1;
+    }
+}
+
+/* [body_hold_ticks] Devolve os ticks do quadro. Idle não avança. */
+static int body_hold_ticks(int clip)
+{
+    if (clip == BODY_CLIP_WALK || clip == BODY_CLIP_WALL) {
+        return BODY_HOLD_SLOW;
+    }
+    if (clip == BODY_CLIP_IDLE) {
+        return 0;
+    }
+    return BODY_HOLD_FAST;
+}
+
+/* [body_oneshot] Devolve 1 se o clip toca uma vez e solta. */
+static int body_oneshot(int clip)
+{
+    return clip == BODY_CLIP_RUN_TURN || clip == BODY_CLIP_JUMP_TURN || clip == BODY_CLIP_DASH;
+}
+
+/* [body_air_clip] Devolve 1 se o pouso cancela o clip. */
+static int body_air_clip(int clip)
+{
+    return clip == BODY_CLIP_JUMP || clip == BODY_CLIP_JUMP_TURN || clip == BODY_CLIP_DASH;
+}
+
+/* [body_restart] Começa o clip no quadro 0 com o hold zerado. */
+static void body_restart(int clip)
+{
+    row_clip[0] = clip;
+    row_frame[0] = 0;
+    row_hold[0] = 0;
+}
+
+/* [body_enter] Troca o clip. Walk e run conservam o quadro. */
+static void body_enter(int clip)
+{
+    int keep;
+
+    if (row_clip[0] == clip) {
+        return;
+    }
+    keep = (row_clip[0] == BODY_CLIP_WALK && clip == BODY_CLIP_RUN)
+        || (row_clip[0] == BODY_CLIP_RUN && clip == BODY_CLIP_WALK);
+    if (!keep) {
+        body_restart(clip);
+        return;
+    }
+    row_clip[0] = clip;
+    row_hold[0] = 0;
+    if (row_frame[0] < 0 || row_frame[0] >= body_sheet_frames(clip)) {
+        row_frame[0] = 0;
+    }
+}
+
+/* [body_advance_due] Avança o quadro quando o hold enche. Devolve 1 se o one-shot terminou. */
+static int body_advance_due(void)
+{
+    int clip;
+    int frames;
+    int need;
+
+    clip = row_clip[0];
+    frames = body_sheet_frames(clip);
+    need = body_hold_ticks(clip);
+    if (frames <= 0 || need <= 0 || row_hold[0] < need) {
+        return 0;
+    }
+    row_hold[0] = 0;
+    if (row_frame[0] + 1 < frames) {
+        row_frame[0] += 1;
+        return 0;
+    }
+    if (clip == BODY_CLIP_JUMP) {
+        return 0;
+    }
+    if (clip == BODY_CLIP_WALK || clip == BODY_CLIP_RUN || clip == BODY_CLIP_WALL) {
+        row_frame[0] = 0;
+        return 0;
+    }
+    return 1;
+}
+
+/* [body_commit] Soma um tick no hold do clip que ficou para o desenho. */
+static void body_commit(void)
+{
+    int need;
+
+    need = body_hold_ticks(row_clip[0]);
+    if (need <= 0) {
+        return;
+    }
+    row_hold[0] += 1;
+}
+
+/* [body_select_ground] Escolhe idle, walk, run ou a virada no chão. */
+static void body_select_ground(void)
+{
+    if (body_turned()) {
+        body_restart(BODY_CLIP_RUN_TURN);
+        return;
+    }
+    if (body_speed() >= WORLD_RUN_MAX) {
+        if (row_clip[0] == BODY_CLIP_RUN) {
+            body_advance_due();
+            return;
+        }
+        body_enter(BODY_CLIP_RUN);
+        return;
+    }
+    if (row_vx[0] != 0) {
+        if (row_clip[0] == BODY_CLIP_WALK) {
+            body_advance_due();
+            return;
+        }
+        body_enter(BODY_CLIP_WALK);
+        return;
+    }
+    if (row_clip[0] == BODY_CLIP_IDLE) {
+        return;
+    }
+    body_restart(BODY_CLIP_IDLE);
+}
+
+/* [body_select_air] Continua o jump, segura o último quadro depois do dash, ou começa a virada. */
+static void body_select_air(int dash_done)
+{
+    int last;
+
+    if (body_turned()) {
+        body_restart(BODY_CLIP_JUMP_TURN);
+        return;
+    }
+    if (dash_done) {
+        last = body_sheet_frames(BODY_CLIP_JUMP) - 1;
+        if (last < 0) {
+            last = 0;
+        }
+        row_clip[0] = BODY_CLIP_JUMP;
+        row_frame[0] = last;
+        row_hold[0] = 0;
+        return;
+    }
+    if (row_clip[0] == BODY_CLIP_JUMP) {
+        body_advance_due();
+        return;
+    }
+    body_restart(BODY_CLIP_JUMP);
+}
+
+/* [body_pose] Escolhe o clip no fim do tick. O latch ganha, o pulo da parede começa o dash, e o one-shot aberto avança. */
+static void body_pose(void)
+{
+    int grounded;
+    int done;
+
+    body_face_now();
+    grounded = row_hit_floor[0] != 0;
+    if (body_latched()) {
+        if (row_clip[0] == BODY_CLIP_WALL) {
+            body_advance_due();
+        } else {
+            body_restart(BODY_CLIP_WALL);
+        }
+    } else if (row_act[0] == BODY_ACT_WALL) {
+        body_restart(BODY_CLIP_DASH);
+    } else if (grounded && body_air_clip(row_clip[0])) {
+        body_select_ground();
+    } else if (body_oneshot(row_clip[0])) {
+        done = body_advance_due();
+        if (done) {
+            if (grounded) {
+                body_select_ground();
+            } else {
+                body_select_air(row_clip[0] == BODY_CLIP_DASH);
+            }
+        }
+    } else if (grounded) {
+        body_select_ground();
+    } else {
+        body_select_air(0);
+    }
+    body_commit();
+    row_vx_was[0] = row_vx[0];
+}
+
+/* [cam_focus_x] Devolve a origem x da View que põe o centro do corpo no meio horizontal. */
+static int cam_focus_x(void)
 {
     int center;
 
-    center = compose_sub(cell, local) + ((WORLD_RECT / 2) << WORLD_SUB);
+    center = compose_sub(row_cell_x[0], row_x[0]) + ((row_w[0] / 2) << WORLD_SUB);
     return center - ((WORLD_VIEW / 2) << WORLD_SUB);
+}
+
+/* [cam_focus_y] Devolve a origem y da View que deixa a linha de [cam_ground] a WORLD_CAM_FLOOR px da base. */
+static int cam_focus_y(void)
+{
+    return *cam_ground - ((WORLD_VIEW - WORLD_CAM_FLOOR) << WORLD_SUB);
 }
 
 /* [cam_axis] Integra um eixo da mola até o alvo. */
@@ -481,25 +752,28 @@ static void cam_axis(int *pos, int *vel, int target)
     *pos += *vel;
 }
 
-/* [cam_spring] Puxa a origem da View para deixar o corpo no centro, com folga e retorno. */
+/* [cam_spring] Segue o meio horizontal e a linha do chão. O pulo não levanta a View; a queda abaixo da linha sim. */
 static void cam_spring(void)
 {
-    cam_axis(cam_x, cam_vx, cam_target(row_cell_x[0], row_x[0]));
-    cam_axis(cam_y, cam_vy, cam_target(row_cell_y[0], row_y[0]));
+    int feet;
+
+    feet = cam_feet();
+    if (feet > *cam_ground) {
+        *cam_ground = feet;
+    }
+    cam_axis(cam_x, cam_vx, cam_focus_x());
+    cam_axis(cam_y, cam_vy, cam_focus_y());
 }
 
-/* [body_place] Põe o corpo no centro da célula 0, zerado, e encosta a câmera com a mola parada. */
+/* [body_place] Põe o corpo no centro da célula 0, zerado, com a pose idle virada à direita, e encosta a câmera na linha dos pés com a mola parada. */
 static void body_place(void)
 {
-    int origin;
-
-    origin = ((WORLD_VIEW - WORLD_RECT) / 2) << WORLD_SUB;
     row_cell_x[0] = 0;
     row_cell_y[0] = 0;
-    row_x[0] = origin;
-    row_y[0] = origin;
-    row_w[0] = WORLD_RECT;
-    row_h[0] = WORLD_RECT;
+    row_x[0] = ((WORLD_VIEW - WORLD_BODY_W) / 2) << WORLD_SUB;
+    row_y[0] = ((WORLD_VIEW - WORLD_BODY_H) / 2) << WORLD_SUB;
+    row_w[0] = WORLD_BODY_W;
+    row_h[0] = WORLD_BODY_H;
     row_vx[0] = 0;
     row_vy[0] = 0;
     row_hit_left[0] = 0;
@@ -508,8 +782,15 @@ static void body_place(void)
     row_hit_ceil[0] = 0;
     row_jump_was[0] = 0;
     row_wall[0] = 0;
-    *cam_x = 0;
-    *cam_y = 0;
+    row_face[0] = 1;
+    row_clip[0] = BODY_CLIP_IDLE;
+    row_frame[0] = 0;
+    row_hold[0] = 0;
+    row_act[0] = BODY_ACT_NONE;
+    row_vx_was[0] = 0;
+    *cam_ground = cam_feet();
+    *cam_x = cam_focus_x();
+    *cam_y = cam_focus_y();
     *cam_vx = 0;
     *cam_vy = 0;
 }
@@ -568,35 +849,72 @@ static int solid_over(int low_x, int low_w, int width, int min_x, int max_edge)
     return roll_pick(lo, hi);
 }
 
-/* [solid_roll] Sorteia as quatro plataformas na célula 0, fora do corredor x 96–144. */
+/* [roll_span] Devolve uma largura que cabe no bolso. Uma em cada quatro usa o bolso inteiro. */
+static int roll_span(int pocket)
+{
+    int w;
+
+    if (pocket < 32) {
+        return pocket;
+    }
+    if (roll_next() % 4 == 0) {
+        return pocket;
+    }
+    w = roll_width(low_widths, 3);
+    if (w > pocket) {
+        w = pocket;
+    }
+    return w;
+}
+
+/* [solid_wall] Grava um muro de 16 px que desce até 24 px acima do chão. */
+static void solid_wall(int index, int x)
+{
+    int top;
+
+    top = roll_pick(WALL_TOP_LO, WALL_TOP_HI);
+    solid_put(index, 0, 0, x, top, WALL_W, WALL_BOTTOM - top);
+}
+
+/* [solid_stack] Empilha três plataformas de 16 px no bolso, cada uma acima da anterior e fora do corredor. */
+static void solid_stack(int index, int min_x, int max_edge)
+{
+    int pocket;
+    int w;
+    int x;
+    int y;
+    int gap;
+    int i;
+
+    pocket = max_edge - min_x;
+    w = roll_span(pocket);
+    x = roll_pick(min_x, max_edge - w);
+    y = roll_pick(LOW_TOP_LO, LOW_TOP_HI);
+    solid_put(index, 0, 0, x, y, w, PLAY_H);
+    for (i = 1; i < STACK_N; i++) {
+        gap = roll_pick(MID_GAP_LO, MID_GAP_HI);
+        w = roll_span(pocket);
+        x = solid_over(x, solid_w[index + i - 1], w, min_x, max_edge);
+        y -= gap;
+        if (y < STACK_TOP) {
+            y = STACK_TOP;
+        }
+        solid_put(index + i, 0, 0, x, y, w, PLAY_H);
+    }
+}
+
+/* [solid_roll] Sorteia os dois muros altos ao lado do corredor e três plataformas em cada bolso. */
 static void solid_roll(void)
 {
-    int lw;
-    int rw;
-    int lx;
-    int rx;
-    int ly;
-    int ry;
-    int mw;
-    int gap;
+    int left_x;
+    int right_x;
 
-    lw = roll_width(low_widths, 3);
-    lx = roll_pick(0, LANE_L - lw);
-    ly = roll_pick(LOW_TOP_LO, LOW_TOP_HI);
-    solid_put(1, 0, 0, lx, ly, lw, PLAY_H);
-
-    rw = roll_width(low_widths, 3);
-    rx = roll_pick(LANE_R, RIGHT_END - rw);
-    ry = roll_pick(LOW_TOP_LO, LOW_TOP_HI);
-    solid_put(2, 0, 0, rx, ry, rw, PLAY_H);
-
-    mw = roll_width(mid_widths, 2);
-    gap = roll_pick(MID_GAP_LO, MID_GAP_HI);
-    solid_put(3, 0, 0, solid_over(lx, lw, mw, 0, LANE_L), ly - gap, mw, PLAY_H);
-
-    mw = roll_width(mid_widths, 2);
-    gap = roll_pick(MID_GAP_LO, MID_GAP_HI);
-    solid_put(4, 0, 0, solid_over(rx, rw, mw, LANE_R, RIGHT_END), ry - gap, mw, PLAY_H);
+    left_x = roll_pick(WALL_X_L_LO, WALL_X_L_HI);
+    right_x = roll_pick(WALL_X_R_LO, WALL_X_R_HI);
+    solid_wall(1, left_x);
+    solid_wall(2, right_x);
+    solid_stack(3, 0, left_x);
+    solid_stack(6, right_x + WALL_W, RIGHT_END);
 }
 
 /* [solid_load] Grava o chão na slice de [arena_level] e chama [solid_roll]. Devolve 0 se couberem. */
@@ -627,7 +945,7 @@ static int solid_load(void)
     return 0;
 }
 
-/* [world_init] Monta o corpo no centro da célula 0, o chão e as plataformas na slice de [arena_level], e a câmera centrada com a mola parada. Devolve 0 se [arena_ready] servir. */
+/* [world_init] Monta o corpo no centro da célula 0, o chão, os muros e as plataformas na slice de [arena_level], e a câmera centrada com a mola parada. Devolve 0 se [arena_ready] servir. */
 int world_init(void)
 {
     arena_slice slice;
@@ -638,7 +956,7 @@ int world_init(void)
         return 1;
     }
     slice = arena_world();
-    need = (size_t)WORLD_CAP * (size_t)WORLD_COLS * sizeof(int) + 5u * sizeof(int);
+    need = (size_t)WORLD_CAP * (size_t)WORLD_COLS * sizeof(int) + 6u * sizeof(int);
     if (slice.data == 0 || slice.size < need) {
         return 1;
     }
@@ -655,13 +973,20 @@ int world_init(void)
     row_hit_ceil = rows + WORLD_CAP * 9;
     row_jump_was = rows + WORLD_CAP * 10;
     row_wall = rows + WORLD_CAP * 11;
+    row_face = rows + WORLD_CAP * 14;
+    row_clip = rows + WORLD_CAP * 15;
+    row_frame = rows + WORLD_CAP * 16;
+    row_hold = rows + WORLD_CAP * 17;
+    row_act = rows + WORLD_CAP * 18;
+    row_vx_was = rows + WORLD_CAP * 19;
     row_cell_x = rows + WORLD_CAP * 12;
     row_cell_y = rows + WORLD_CAP * 13;
     cam_x = rows + WORLD_CAP * WORLD_COLS;
     cam_y = cam_x + 1;
     cam_vx = cam_y + 1;
     cam_vy = cam_vx + 1;
-    roll_state = cam_vy + 1;
+    cam_ground = cam_vy + 1;
+    roll_state = cam_ground + 1;
     *roll_state = 1;
     row_count = 1;
     if (solid_load() != 0) {
@@ -671,7 +996,7 @@ int world_init(void)
     return 0;
 }
 
-/* [world_reset] Re-rola as quatro plataformas, devolve o corpo ao centro da célula 0 e encosta a câmera. */
+/* [world_reset] Re-rola os dois muros e as seis plataformas, devolve o corpo ao centro da célula 0 e encosta a câmera. */
 void world_reset(void)
 {
     if (row_count < 1) {
@@ -681,7 +1006,7 @@ void world_reset(void)
     body_place();
 }
 
-/* [world_tick] Integra um tick fixo; move_down solta o latch antes da corrida e a mola da câmera segue o centro do corpo. */
+/* [world_tick] Integra um tick fixo; move_down solta o latch antes da corrida, a mola da câmera segue o meio horizontal e a linha do chão, e [body_pose] escolhe o clip. */
 void world_tick(const actions *input)
 {
     if (row_count < 1 || input == 0) {
@@ -697,6 +1022,21 @@ void world_tick(const actions *input)
     body_solve_y();
     body_jump(input);
     cam_spring();
+    body_pose();
+}
+
+/* [world_body_pose] Escreve o clip, o quadro e a face. Face -1 pede o flip. */
+void world_body_pose(int *clip, int *frame, int *face)
+{
+    if (row_count < 1) {
+        *clip = BODY_CLIP_IDLE;
+        *frame = 0;
+        *face = 1;
+        return;
+    }
+    *clip = row_clip[0];
+    *frame = row_frame[0];
+    *face = row_face[0];
 }
 
 /* [world_rect] Escreve a posição no mundo, em pixels, e o tamanho do Rect. */

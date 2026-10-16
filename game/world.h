@@ -8,16 +8,19 @@ extern "C" {
 #endif
 
 #define WORLD_VIEW 240
-#define WORLD_RECT 16
+#define WORLD_BODY_W 8
+#define WORLD_BODY_H 12
 
-/* [world_init] Monta o corpo no centro da célula 0, o chão e as plataformas na slice de [arena_level], e a câmera centrada com a mola parada. Devolve 0 se [arena_ready] servir. */
+/* [world_init] Monta o corpo no centro da célula 0, o chão, os muros e as plataformas na slice de [arena_level], e a câmera centrada com a mola parada. Devolve 0 se [arena_ready] servir. */
 int world_init(void);
-/* [world_reset] Re-rola as quatro plataformas, devolve o corpo ao centro da célula 0 e encosta a câmera. */
+/* [world_reset] Re-rola os dois muros e as seis plataformas, devolve o corpo ao centro da célula 0 e encosta a câmera. */
 void world_reset(void);
-/* [world_tick] Integra um tick fixo; move_down solta o latch antes da corrida e a mola da câmera segue o centro do corpo. */
+/* [world_tick] Integra um tick fixo; move_down solta o latch antes da corrida, a mola da câmera segue o meio horizontal e a linha do chão, e [body_pose] escolhe o clip. */
 void world_tick(const actions *input);
 /* [world_rect] Escreve a posição no mundo, em pixels, e o tamanho do Rect. */
 void world_rect(int *x, int *y, int *w, int *h);
+/* [world_body_pose] Escreve o clip, o quadro e a face. Face -1 pede o flip. */
+void world_body_pose(int *clip, int *frame, int *face);
 /* [world_camera] Escreve a origem da View em pixels do mundo. */
 void world_camera(int *x, int *y);
 /* [world_solid_count] Devolve quantos AABB estáticos a slice guarda. */

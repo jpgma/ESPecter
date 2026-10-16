@@ -676,6 +676,13 @@ support a decision. Keep links to the detailed agent report.
   2026-10-16   The camera springs toward the body center. architecture.md                  medium       The spring tune changes
                A twelfth of the gap joins the velocity;
                six eighths of it remains
+  2026-10-16   world_reset re-rolls two tall walls beside  architecture.md                  medium       The wall gap or the
+               the spawn column and six platforms in the                           pocket stacks change
+               side pockets. The column interior stays
+               clear
+  2026-10-16   The camera keeps the body on the horizontal architecture.md                  medium       The ground margin or the
+               middle and the ground line 32 px above the                          spring tune changes
+               bottom. A jump does not lift the view
 
 ## 7. Research execution plan
 

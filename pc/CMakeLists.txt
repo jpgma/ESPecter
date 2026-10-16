@@ -50,6 +50,7 @@ add_executable(especter_pc
     main.c
     actions_ds4.c
     "${ROOT}/game/arena.c"
+    "${ROOT}/game/body_sheet.c"
     "${ROOT}/game/world.c"
     "${ROOT}/host/engine_host.cpp"
     ${ENGINE_SRCS}
