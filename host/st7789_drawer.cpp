@@ -396,7 +396,8 @@ void st7789_pwr_ready(void)
 
 /* [st7789_drawer] Deixa o panel fechado. [st7789_drawer::init] usa as slices de [arena_bands] e [arena_pixels]. */
 st7789_drawer::st7789_drawer()
-    : pixels(nullptr), band(nullptr), ready(0), panel(nullptr), panel_io(nullptr), spi_done(nullptr)
+    : pixels(nullptr), band(nullptr), ready(0), panel(nullptr), panel_io(nullptr), spi_done(nullptr), band_slot(0),
+      band_pending(0)
 {
 }
 
@@ -551,14 +552,26 @@ void st7789_drawer::drawFilledRectangle(int x, int y, int w, int h, uint16_t col
     }
 }
 
-/* [st7789_drawer::sendBuffer] Expande as rows sujas no band ocioso e manda essa janela. Máscara vazia não chama SPI. */
+/* [st7789_drawer::spi_drain] Espera os bands que [st7789_drawer::sendBuffer] deixou no fio. */
+void st7789_drawer::spi_drain()
+{
+    auto *done = static_cast<SemaphoreHandle_t>(spi_done);
+
+    if (spi_done == nullptr) {
+        return;
+    }
+    while (band_pending > 0) {
+        spi_wait(done);
+        band_pending -= 1;
+    }
+}
+
+/* [st7789_drawer::sendBuffer] Expande as rows sujas no band ocioso e manda essa janela. Volta com o último band no fio. Máscara vazia não chama SPI. */
 void st7789_drawer::sendBuffer()
 {
     auto *lcd = static_cast<esp_lcd_panel_handle_t>(panel);
     auto *done = static_cast<SemaphoreHandle_t>(spi_done);
     int y;
-    int slot;
-    int pending;
     int timing;
     int64_t expand_us;
     int64_t spi_us;
@@ -573,8 +586,6 @@ void st7789_drawer::sendBuffer()
         }
         return;
     }
-    slot = 0;
-    pending = 0;
     y = 0;
     while (y < k_height) {
         int y0;
@@ -593,7 +604,7 @@ void st7789_drawer::sendBuffer()
             y++;
             rows++;
         }
-        if (pending == 2) {
+        if (band_pending == 2) {
             if (timing) {
                 t0 = esp_timer_get_time();
             }
@@ -601,9 +612,9 @@ void st7789_drawer::sendBuffer()
             if (timing) {
                 spi_us += esp_timer_get_time() - t0;
             }
-            pending -= 1;
+            band_pending -= 1;
         }
-        dst_band = band + slot * k_band_pixels;
+        dst_band = band + band_slot * k_band_pixels;
         if (timing) {
             t0 = esp_timer_get_time();
         }
@@ -624,20 +635,8 @@ void st7789_drawer::sendBuffer()
         if (timing) {
             spi_us += esp_timer_get_time() - t0;
         }
-        pending += 1;
-        slot ^= 1;
-    }
-    while (pending > 0) {
-        int64_t t0 = 0;
-
-        if (timing) {
-            t0 = esp_timer_get_time();
-        }
-        spi_wait(done);
-        if (timing) {
-            spi_us += esp_timer_get_time() - t0;
-        }
-        pending -= 1;
+        band_pending += 1;
+        band_slot ^= 1;
     }
     if (timing) {
         frame_profile_add(FRAME_EXPAND, expand_us);

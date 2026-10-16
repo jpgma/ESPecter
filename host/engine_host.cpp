@@ -1013,7 +1013,7 @@ void sim_task(void *arg)
     }
 }
 
-/* [present_task] No core 1, constrói o drawer na slice de [arena_drawer] e o Engine na slice de [arena_engine], e chama Engine::run enquanto [st7789_lit] estiver aceso. Máscara vazia espera 1 ms. */
+/* [present_task] No core 1, constrói o drawer na slice de [arena_drawer] e o Engine na slice de [arena_engine], e chama Engine::run enquanto [st7789_lit] estiver aceso. Máscara vazia espera 1 ms. No duty 0, [st7789_drawer::spi_drain] fecha o band no fio antes de dormir. */
 void present_task(void *arg)
 {
     unsigned long prev;
@@ -1053,6 +1053,7 @@ void present_task(void *arg)
         unsigned long delta;
 
         if (!especter::st7789_lit()) {
+            drawer->spi_drain();
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             prev = millis();
             continue;

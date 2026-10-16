@@ -55,8 +55,10 @@ public:
     void init() override;
     /* [st7789_drawer::clearBuffer] Não mexe na palette nem nos índices. A cena restaura as rows sujas. */
     void clearBuffer() override;
-    /* [st7789_drawer::sendBuffer] Expande as rows sujas no band ocioso e manda essa janela. Máscara vazia não chama SPI. */
+    /* [st7789_drawer::sendBuffer] Expande as rows sujas no band ocioso e manda essa janela. Volta com o último band no fio. Máscara vazia não chama SPI. */
     void sendBuffer() override;
+    /* [st7789_drawer::spi_drain] Espera os bands que [st7789_drawer::sendBuffer] deixou no fio. */
+    void spi_drain();
     /* [st7789_drawer::drawPixel] Grava um índice da palette no pixel se a row está na máscara. */
     void drawPixel(int x, int y, uint16_t color) override;
     /* [st7789_drawer::drawFilledRectangle] Preenche um rectangle com um índice da palette. Uma linha cheia usa memset. Row limpa não muda. */
@@ -72,6 +74,8 @@ private:
     void *panel;
     void *panel_io;
     void *spi_done;
+    int band_slot;
+    int band_pending;
 };
 
 } // namespace especter
