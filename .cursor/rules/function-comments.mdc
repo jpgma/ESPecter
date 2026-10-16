@@ -17,7 +17,7 @@ Se a frase depende do contrato de outra função, cita o id dela no texto.
 
 Ao mudar uma função, atualize o comentário do id dela. Busque o token exato `\[id\]` (o colchete fecha logo após o símbolo) e ajuste cada comentário cuja frase deixou de valer.
 
-`third_party/` é dependência. Não comentar.
+`third_party/` é o engine e o APU vendored. Não comentar, mesmo quando a função é alterada.
 
 ```c
 /* [clamp_pos] Limita a posição para o Rect caber na View. */

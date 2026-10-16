@@ -688,6 +688,10 @@ support a decision. Keep links to the detailed agent report.
                exit. Death holds 16 ticks, then the
                last checkpoint. The exit freezes
                until reset. The LCG is gone
+  2026-10-16   PixelRoot32 1.12.0 (826be881) and APU      architecture.md                  high         A later upstream
+               v2.0.0 (b603b3a9) are vendored source                            snapshot is taken
+               snapshots. Submodules are gone. The
+               trees may be patched
 
 ## 7. Research execution plan
 

@@ -8,7 +8,7 @@ Hardware measurements live in the Waveshare board note `HARDWARE.md` for ESP32-S
 
 Game code is C: plain structs, free functions, fixed-capacity SoA, no classes, templates, exceptions, RTTI, or STL containers. Names are standard-library style: `snake_case` types, functions, and files.
 
-C++ exists only where PixelRoot32 forces it. The engine stays an unmodified C++17 library. [host/engine_host.cpp](host/engine_host.cpp) subclasses `Scene`. [host/st7789_drawer.cpp](host/st7789_drawer.cpp) subclasses `BaseDrawSurface`.
+C++ exists only where PixelRoot32 forces it. The vendored engine stays C++17 and may be patched. [host/engine_host.cpp](host/engine_host.cpp) subclasses `Scene`. [host/st7789_drawer.cpp](host/st7789_drawer.cpp) subclasses `BaseDrawSurface`. New C++ we write stays in those two files.
 
 `game/` does not include PixelRoot32 or ESP-IDF.
 
@@ -27,17 +27,17 @@ ESPecter/
   pc.bat
   flash.bat
   monitor.bat
-  third_party/pixelroot32/      # submodule, tag 1.12.0
-  third_party/pixelroot32-apu/  # submodule, tag v2.0.0
+  third_party/pixelroot32/      # vendored 1.12.0, 826be881, include and src
+  third_party/pixelroot32-apu/  # vendored v2.0.0, b603b3a9, include and src
 ```
 
-The engine headers include `<pixelroot32/apu/ApuCore.h>` even when audio is compiled out, so the APU tree is pinned beside the engine. It is not a second game engine.
+The engine headers include `<pixelroot32/apu/ApuCore.h>` even when audio is compiled out, so the APU tree is vendored beside the engine. It is not a second game engine.
 
 ## Engine integration
 
 PixelRoot32 1.12.0 has no ESP-IDF component. Its device drawer is TFT_eSPI and assumes a 40 MHz SPI ceiling. This panel is clear at SPI mode 3, 80 MHz, and a full RGB565 frame measured 12271 µs. There is no TE pin, so the glass cannot be vsynced.
 
-The device build passes `DisplayType::CUSTOM` and [host/st7789_drawer.cpp](host/st7789_drawer.cpp). That drawer uses `esp_lcd` on SPI3, the same pins and mode as the board hello. [compat/Arduino.h](compat/Arduino.h) and [compat/SPI.h](compat/SPI.h) satisfy the engine's non-native includes. `ARDUINO_ARCH_ESP32` is not defined. The engine tree is not patched.
+The device build passes `DisplayType::CUSTOM` and [host/st7789_drawer.cpp](host/st7789_drawer.cpp). That drawer uses `esp_lcd` on SPI3, the same pins and mode as the board hello. [compat/Arduino.h](compat/Arduino.h) and [compat/SPI.h](compat/SPI.h) satisfy the engine's non-native includes. `ARDUINO_ARCH_ESP32` is not defined. The trees may be patched. This vendor step does not change engine behavior.
 
 On this target [graphics/DisplayConfig.h](third_party/pixelroot32/include/graphics/DisplayConfig.h) names `DrawSurface` and [core/Engine.cpp](third_party/pixelroot32/src/core/Engine.cpp) aliases `pixelroot32::drivers` without opening that namespace. [host/pr32_config.h](host/pr32_config.h) is force-included and, for device C++ only, pulls in `graphics/DrawSurface.h` and opens `pixelroot32::drivers`. The same engine file calls `ESP.getFreeHeap` after [platforms/EngineConfig.h](third_party/pixelroot32/include/platforms/EngineConfig.h) includes `<Arduino.h>`. The shim's `ESP` reports the 8-bit heap. `millis`, `delay`, and the GPIO helpers are functions, so a method named `millis` in the engine still declares. The PC build defines `PLATFORM_NATIVE` and does not take this path.
 
@@ -238,3 +238,4 @@ Boot log, after the engine buffer exists: free internal heap, largest free inter
 | 2026-10-16 | The camera keeps the body on the horizontal middle and the ground line 32 px above the bottom. A jump does not lift the view. The spring takes half the gap and keeps three eighths of the velocity |
 | 2026-10-16 | The AABB is 8×12, centered on the 16×16 cell with the feet on the bottom row. Wall slide faces away from the latch |
 | 2026-10-16 | The course is fixed: a wall-jump slot, a 48 px pit, one spike, a checkpoint, and an exit. Death holds 16 ticks, then the last checkpoint. The exit freezes until reset. The LCG is gone |
+| 2026-10-16 | PixelRoot32 1.12.0 (`826be881`) and PixelRoot32-APU v2.0.0 (`b603b3a9`) are vendored source snapshots. Submodules are gone. Upstream history is not imported. Docs, assets, examples, and tests are not copied. The trees may be patched |

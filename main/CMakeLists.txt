@@ -4,10 +4,10 @@ set(PR32 "${ROOT}/third_party/pixelroot32")
 set(APU "${ROOT}/third_party/pixelroot32-apu")
 
 if(NOT EXISTS "${PR32}/include/core/Engine.h")
-    message(FATAL_ERROR "PixelRoot32 is missing. Run: git submodule update --init")
+    message(FATAL_ERROR "PixelRoot32 sources are missing from third_party/pixelroot32")
 endif()
 if(NOT EXISTS "${APU}/include/pixelroot32/apu/ApuCore.h")
-    message(FATAL_ERROR "PixelRoot32-APU is missing. Run: git submodule update --init")
+    message(FATAL_ERROR "PixelRoot32-APU sources are missing from third_party/pixelroot32-apu")
 endif()
 
 include("${ROOT}/cmake/pixelroot32.cmake")

@@ -4,22 +4,16 @@ A small 2D platformer for the Waveshare ESP32-S3-Touch-LCD-1.54. Decisions live 
 
 ## Prerequisites
 
-- Git, with the submodules below.
+- Git.
 - For the board: ESP-IDF 5.5 or newer. `flash.bat` uses `IDF_PATH`, or `%USERPROFILE%\esp\esp-idf` if that is unset.
 - For the PC: CMake and a C++ compiler. The PC script fetches SDL2. It does not need MSYS2.
 
 ## Checkout
 
-`pc.bat` needs the submodules on disk. `flash.bat` runs the same init when the engine headers are missing.
+The engine sources are in the repo.
 
-```text
-git submodule update --init
-```
-
-Pins:
-
-- `third_party/pixelroot32` at tag `1.12.0`
-- `third_party/pixelroot32-apu` at tag `v2.0.0` (the engine headers include it even with audio compiled out)
+- `third_party/pixelroot32` is PixelRoot32 1.12.0 (`826be881`): `include`, `src`, `LICENSE`, and `TRADEMARK.md`.
+- `third_party/pixelroot32-apu` is PixelRoot32-APU v2.0.0 (`b603b3a9`): `include`, `src`, and `LICENSE`. The engine headers include it even with audio compiled out.
 
 ## PC
 
@@ -37,4 +31,4 @@ flash.bat --port COM5
 monitor.bat
 ```
 
-`flash.bat` builds and flashes. If the PixelRoot32 headers are missing it runs `git submodule update --init`. If `build` exists without `CMakeCache.txt`, it deletes that directory so `set-target` can run. `flash.bat`, `pc.bat`, and `monitor.bat` print how long each step took. The panel shows the same course: the figure in those four colors, the two floors, the walls, the six platforms, the magenta spike, and the white checkpoint and exit. Debug starts off. PLUS toggles it: the battery percent at the top-left, the present rate at the top-right in a 5×7 font, and a white outline of each 240 cell on screen. The ground is red before the scan, amber while it looks, and a darker green than the pademu bar once Pad Emu links. The body falls to the floor. Once linked, left and right run and the south button jumps. Standing is idle, a slow floor speed is walk, the band up to the run cap is jog, full run is the run loop, reversing plays the matching turn once, and leaving a wall plays the dash sheet once. Landing on a black rectangle is a floor. A vertical face latches a slow slide. D-pad down releases it. The south button on a rising press, while latched and off the floor, leaves on a diagonal. Hitting the underside stops the rise. D-pad up does not move the body. The view keeps the body on the horizontal middle and the ground under its feet along the bottom. A jump leaves that ground where it is. Past either floor, or off the left of the first cell, the feet drop below the slab and the body dies. The spike does the same. The body holds for about a quarter second, then returns to the last checkpoint with the camera snapped there. Spawn is that checkpoint until the outline is touched. Touching the exit stops the body until one BOOT restarts the course. If the phone drops, the link falls in about two seconds, the ground goes amber, and the central looks again. One press of BOOT restarts the course after 400 ms: the body returns to the first cell, the checkpoint clears back to spawn, and the view snaps there. The room does not change. Two presses inside that window drop the Pad Emu link and scan again. That is how a vanished emulator is dropped without a disconnect: the ground leaves green, the scan is amber, and it turns green again when Pad Emu notifies. The world does not reset on that double press. Holding BOOT does not repeat. The backlight fades on, and PWR fades it off or back on. The log shows the BLE controller, then `linked`, plus the arena capacity and offset, free internal heap, the largest free internal block, and free PSRAM. The figure still appears with no phone in range. Pad Emu is the phone app in the Waveshare board repo (`pad.bat` there). The device does not init I2C, Wi-Fi, the codec, or the IMU.
+`flash.bat` builds and flashes. If `Engine.h` or `ApuCore.h` is missing, it stops. If `build` exists without `CMakeCache.txt`, it deletes that directory so `set-target` can run. `flash.bat`, `pc.bat`, and `monitor.bat` print how long each step took. The panel shows the same course: the figure in those four colors, the two floors, the walls, the six platforms, the magenta spike, and the white checkpoint and exit. Debug starts off. PLUS toggles it: the battery percent at the top-left, the present rate at the top-right in a 5×7 font, and a white outline of each 240 cell on screen. The ground is red before the scan, amber while it looks, and a darker green than the pademu bar once Pad Emu links. The body falls to the floor. Once linked, left and right run and the south button jumps. Standing is idle, a slow floor speed is walk, the band up to the run cap is jog, full run is the run loop, reversing plays the matching turn once, and leaving a wall plays the dash sheet once. Landing on a black rectangle is a floor. A vertical face latches a slow slide. D-pad down releases it. The south button on a rising press, while latched and off the floor, leaves on a diagonal. Hitting the underside stops the rise. D-pad up does not move the body. The view keeps the body on the horizontal middle and the ground under its feet along the bottom. A jump leaves that ground where it is. Past either floor, or off the left of the first cell, the feet drop below the slab and the body dies. The spike does the same. The body holds for about a quarter second, then returns to the last checkpoint with the camera snapped there. Spawn is that checkpoint until the outline is touched. Touching the exit stops the body until one BOOT restarts the course. If the phone drops, the link falls in about two seconds, the ground goes amber, and the central looks again. One press of BOOT restarts the course after 400 ms: the body returns to the first cell, the checkpoint clears back to spawn, and the view snaps there. The room does not change. Two presses inside that window drop the Pad Emu link and scan again. That is how a vanished emulator is dropped without a disconnect: the ground leaves green, the scan is amber, and it turns green again when Pad Emu notifies. The world does not reset on that double press. Holding BOOT does not repeat. The backlight fades on, and PWR fades it off or back on. The log shows the BLE controller, then `linked`, plus the arena capacity and offset, free internal heap, the largest free internal block, and free PSRAM. The figure still appears with no phone in range. Pad Emu is the phone app in the Waveshare board repo (`pad.bat` there). The device does not init I2C, Wi-Fi, the codec, or the IMU.

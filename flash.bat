@@ -33,7 +33,7 @@ echo   flash.bat
 echo   flash.bat --port COM5
 echo.
 echo ESP-IDF is %%USERPROFILE%%\esp\esp-idf, or IDF_PATH if that is already set.
-echo Missing PixelRoot32 trees are fetched with git submodule update --init.
+echo PixelRoot32 sources live in third_party. A missing Engine.h or ApuCore.h stops the script.
 echo A build directory without CMakeCache.txt is deleted before set-target.
 echo Each step prints how long it took.
 exit /b 0
@@ -57,20 +57,12 @@ echo Using ESP-IDF: %IDF_PATH%
 echo Flashing on !PORT!
 
 call :tick T
-set "NEED_SUBMODULES=0"
-if not exist "third_party\pixelroot32\include\core\Engine.h" set "NEED_SUBMODULES=1"
-if not exist "third_party\pixelroot32-apu\include\pixelroot32\apu\ApuCore.h" set "NEED_SUBMODULES=1"
 set "ERR=0"
-if "!NEED_SUBMODULES!"=="1" (
-    echo PixelRoot32 is missing. Running git submodule update --init
-    git submodule update --init
-    set "ERR=!ERRORLEVEL!"
-)
-if !ERR! equ 0 if not exist "third_party\pixelroot32\include\core\Engine.h" set "ERR=1"
-if !ERR! equ 0 if not exist "third_party\pixelroot32-apu\include\pixelroot32\apu\ApuCore.h" set "ERR=1"
-call :tock "!T!" "submodules"
+if not exist "third_party\pixelroot32\include\core\Engine.h" set "ERR=1"
+if not exist "third_party\pixelroot32-apu\include\pixelroot32\apu\ApuCore.h" set "ERR=1"
+call :tock "!T!" "engine"
 if !ERR! neq 0 (
-    echo git submodule update --init failed
+    echo PixelRoot32 sources are missing from third_party.
     exit /b !ERR!
 )
 
