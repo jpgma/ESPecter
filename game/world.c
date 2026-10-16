@@ -2,6 +2,7 @@
 
 #include "arena.h"
 #include "body_sheet.h"
+#include "map.h"
 
 #define WORLD_CAP 8
 #define WORLD_SUB 8
@@ -30,15 +31,8 @@
 #define WORLD_CAM_DAMP_DEN 32
 #define WORLD_CAM_FLOOR 32
 #define WORLD_SPAN (WORLD_VIEW << WORLD_SUB)
-#define SOLID_CAP WORLD_SOLID_CAP
-#define SOLID_COLS 6
-#define SOLID_USED 10
-#define PLAY_H 16
-#define WALL_W 16
-#define WALL_H 184
-#define GROUND_Y 224
-#define GROUND_H 32
-#define PIT_Y (GROUND_Y + GROUND_H)
+#define APRON_N 9
+#define PIT_Y 256
 #define WORLD_TAIL 11
 #define LIFE_PLAY 0
 #define LIFE_DYING 1
@@ -48,26 +42,6 @@
 #define SPAWN_CELL_Y 0
 #define SPAWN_X (((WORLD_VIEW - WORLD_BODY_W) / 2) << WORLD_SUB)
 #define SPAWN_Y (((WORLD_VIEW - WORLD_BODY_H) / 2) << WORLD_SUB)
-#define SPIKE_CX 1
-#define SPIKE_CY 0
-#define SPIKE_X 112
-#define SPIKE_Y 216
-#define SPIKE_W 48
-#define SPIKE_H 8
-#define CP_CX 1
-#define CP_CY 0
-#define CP_X 176
-#define CP_Y 176
-#define CP_W 16
-#define CP_H 48
-#define CP_STAND_X (180 << WORLD_SUB)
-#define CP_STAND_Y (212 << WORLD_SUB)
-#define EXIT_CX 2
-#define EXIT_CY 0
-#define EXIT_X 16
-#define EXIT_Y 192
-#define EXIT_W 16
-#define EXIT_H 32
 
 static int *row_x;
 static int *row_y;
@@ -101,13 +75,9 @@ static int *cp_cell_x;
 static int *cp_x;
 static int *cp_cell_y;
 static int *cp_y;
-static int *solid_cx;
-static int *solid_cy;
-static int *solid_x;
-static int *solid_y;
-static int *solid_w;
-static int *solid_h;
-static int solid_count;
+static int *apron_tx;
+static int *apron_ty;
+static uint8_t *apron;
 
 /* [range_overlaps] Devolve 1 se [a0, a1) cruza [b0, b1). Aresta encostada não conta. */
 static int range_overlaps(int a0, int a1, int b0, int b1)
@@ -134,18 +104,50 @@ static void split_sub(int composed, int *cell, int *local)
     *local = composed - next * WORLD_SPAN;
 }
 
-/* [solid_box] Escreve o AABB index em subpixels do mundo. */
-static void solid_box(int index, int *left, int *top, int *right, int *bottom)
+/* [sub_to_px] Devolve o pixel desse subpixel. Negativo usa divisão para −∞. */
+static int sub_to_px(int sub)
 {
+    int px;
+
+    px = sub / (1 << WORLD_SUB);
+    if (sub < 0 && sub % (1 << WORLD_SUB) != 0) {
+        px -= 1;
+    }
+    return px;
+}
+
+/* [tile_index] Devolve o tile desse pixel. Negativo usa divisão para −∞. */
+static int tile_index(int px)
+{
+    int tile;
+
+    tile = px / MAP_TILE;
+    if (px < 0 && px % MAP_TILE != 0) {
+        tile -= 1;
+    }
+    return tile;
+}
+
+/* [apron_set_box] Escreve o tile set do apron em subpixels do mundo. Devolve 0 se o slot não bloqueia. */
+static int apron_set_box(int index, int *left, int *top, int *right, int *bottom)
+{
+    int dx;
+    int dy;
     int x;
     int y;
 
-    x = solid_cx[index] * WORLD_VIEW + solid_x[index];
-    y = solid_cy[index] * WORLD_VIEW + solid_y[index];
+    if (apron == 0 || apron_tx == 0 || index < 0 || index >= APRON_N || apron[index] != MAP_SET) {
+        return 0;
+    }
+    dx = (index % 3) - 1;
+    dy = (index / 3) - 1;
+    x = (*apron_tx + dx) * MAP_TILE;
+    y = (*apron_ty + dy) * MAP_TILE;
     *left = x << WORLD_SUB;
     *top = y << WORLD_SUB;
-    *right = (x + solid_w[index]) << WORLD_SUB;
-    *bottom = (y + solid_h[index]) << WORLD_SUB;
+    *right = (x + MAP_TILE) << WORLD_SUB;
+    *bottom = (y + MAP_TILE) << WORLD_SUB;
+    return 1;
 }
 
 /* [axis_out] Devolve a posição que sai pela face mais curta. side recebe 1 na mínima e -1 na máxima. */
@@ -183,16 +185,15 @@ static void body_embed(int horizontal, int fixed, int fixed_size, int move_size,
     int side;
     int pen;
 
-    for (pass = 0; pass < solid_count; pass++) {
+    for (pass = 0; pass < APRON_N; pass++) {
         found = 0;
         pen_best = 0;
         out_best = *best;
         side_best = 0;
-        for (i = 0; i < solid_count; i++) {
-            if (solid_w[i] <= 0 || solid_h[i] <= 0) {
+        for (i = 0; i < APRON_N; i++) {
+            if (!apron_set_box(i, &left, &top, &right, &bottom)) {
                 continue;
             }
-            solid_box(i, &left, &top, &right, &bottom);
             if (horizontal) {
                 if (!range_overlaps(fixed, fixed + fixed_size, top, bottom)) {
                     continue;
@@ -317,11 +318,10 @@ static int body_stop_x(int x0, int dest, int y, int bw, int bh, int *hit)
 
     *hit = 0;
     best = dest;
-    for (i = 0; i < solid_count; i++) {
-        if (solid_w[i] <= 0 || solid_h[i] <= 0) {
+    for (i = 0; i < APRON_N; i++) {
+        if (!apron_set_box(i, &left, &top, &right, &bottom)) {
             continue;
         }
-        solid_box(i, &left, &top, &right, &bottom);
         if (!range_overlaps(y, y + bh, top, bottom)) {
             continue;
         }
@@ -356,11 +356,10 @@ static int body_stop_y(int y0, int dest, int x, int bw, int bh, int *hit)
 
     *hit = 0;
     best = dest;
-    for (i = 0; i < solid_count; i++) {
-        if (solid_w[i] <= 0 || solid_h[i] <= 0) {
+    for (i = 0; i < APRON_N; i++) {
+        if (!apron_set_box(i, &left, &top, &right, &bottom)) {
             continue;
         }
-        solid_box(i, &left, &top, &right, &bottom);
         if (!range_overlaps(x, x + bw, left, right)) {
             continue;
         }
@@ -410,11 +409,10 @@ static int body_on_latch(void)
     } else {
         probe = x + 1;
     }
-    for (i = 0; i < solid_count; i++) {
-        if (solid_w[i] <= 0 || solid_h[i] <= 0) {
+    for (i = 0; i < APRON_N; i++) {
+        if (!apron_set_box(i, &left, &top, &right, &bottom)) {
             continue;
         }
-        solid_box(i, &left, &top, &right, &bottom);
         if (range_overlaps(probe, probe + bw, left, right) &&
             range_overlaps(y, y + bh, top, bottom)) {
             return 1;
@@ -803,7 +801,50 @@ static void cam_spring(void)
     cam_axis(cam_y, cam_vy, cam_focus_y());
 }
 
-/* [body_place_at] Põe o corpo no local em subpixels, zerado, com a pose idle virada à direita, e encosta a câmera na linha dos pés com a mola parada. */
+/* [body_center_tile] Escreve o tile que contém o centro do corpo. */
+static void body_center_tile(int *tx, int *ty)
+{
+    int x;
+    int y;
+
+    x = compose_sub(row_cell_x[0], row_x[0]) + ((row_w[0] << WORLD_SUB) / 2);
+    y = compose_sub(row_cell_y[0], row_y[0]) + ((row_h[0] << WORLD_SUB) / 2);
+    *tx = tile_index(sub_to_px(x));
+    *ty = tile_index(sub_to_px(y));
+}
+
+/* [apron_load] Copia de [map_at] o tile e os oito ao redor para a slice de [arena_level]. */
+static void apron_load(int tx, int ty)
+{
+    int dy;
+    int dx;
+
+    *apron_tx = tx;
+    *apron_ty = ty;
+    for (dy = -1; dy <= 1; dy++) {
+        for (dx = -1; dx <= 1; dx++) {
+            apron[(dy + 1) * 3 + (dx + 1)] = (uint8_t)map_at(tx + dx, ty + dy);
+        }
+    }
+}
+
+/* [apron_sync] Recarrega o apron se o tile do centro mudou. */
+static void apron_sync(void)
+{
+    int tx;
+    int ty;
+
+    if (apron == 0 || apron_tx == 0) {
+        return;
+    }
+    body_center_tile(&tx, &ty);
+    if (tx == *apron_tx && ty == *apron_ty) {
+        return;
+    }
+    apron_load(tx, ty);
+}
+
+/* [body_place_at] Põe o corpo no local em subpixels, zerado, com a pose idle virada à direita, encosta a câmera e chama [apron_sync]. */
 static void body_place_at(int cell_x, int x, int cell_y, int y)
 {
     row_cell_x[0] = cell_x;
@@ -831,6 +872,7 @@ static void body_place_at(int cell_x, int x, int cell_y, int y)
     *cam_y = cam_focus_y();
     *cam_vx = 0;
     *cam_vy = 0;
+    apron_sync();
 }
 
 /* [body_place] Põe o corpo no spawn com [body_place_at]. */
@@ -848,60 +890,36 @@ static void mark_spawn(void)
     *cp_y = SPAWN_Y;
 }
 
-/* [solid_put] Grava o AABB index na célula e no local em pixels. */
-static void solid_put(int index, int cell_x, int cell_y, int x, int y, int w, int h)
-{
-    solid_cx[index] = cell_x;
-    solid_cy[index] = cell_y;
-    solid_x[index] = x;
-    solid_y[index] = y;
-    solid_w[index] = w;
-    solid_h[index] = h;
-}
-
-/* [solid_course] Grava os dois chãos, os muros e as seis plataformas. */
-static void solid_course(void)
-{
-    solid_put(0, 0, 0, 0, GROUND_Y, WORLD_VIEW, GROUND_H);
-    solid_put(1, 0, 0, 80, 16, WALL_W, WALL_H);
-    solid_put(2, 0, 0, 144, 16, WALL_W, WALL_H);
-    solid_put(3, 0, 0, 8, 184, 64, PLAY_H);
-    solid_put(4, 0, 0, 8, 144, 56, PLAY_H);
-    solid_put(5, 0, 0, 12, 104, 48, PLAY_H);
-    solid_put(6, 0, 0, 168, 184, 64, PLAY_H);
-    solid_put(7, 0, 0, 168, 144, 56, PLAY_H);
-    solid_put(8, 0, 0, 176, 104, 48, PLAY_H);
-    solid_put(9, 1, 0, 48, GROUND_Y, WORLD_VIEW, GROUND_H);
-    solid_count = SOLID_USED;
-}
-
-/* [solid_load] Grava o percurso de [solid_course] na slice de [arena_level]. Devolve 0 se couber. */
-static int solid_load(void)
+/* [apron_bind] Aponta o centro e os nove kinds para a slice de [arena_level]. Devolve 0 se couber. */
+static int apron_bind(void)
 {
     arena_slice slice;
-    int *rows;
-    size_t need;
 
-    if (SOLID_USED > SOLID_CAP) {
-        return 1;
-    }
     slice = arena_level();
-    need = (size_t)SOLID_CAP * (size_t)SOLID_COLS * sizeof(int);
-    if (slice.data == 0 || slice.size < need) {
+    if (slice.data == 0 || slice.size < sizeof(int) * 2u + (size_t)APRON_N) {
         return 1;
     }
-    rows = (int *)slice.data;
-    solid_cx = rows;
-    solid_cy = rows + SOLID_CAP;
-    solid_x = rows + SOLID_CAP * 2;
-    solid_y = rows + SOLID_CAP * 3;
-    solid_w = rows + SOLID_CAP * 4;
-    solid_h = rows + SOLID_CAP * 5;
-    solid_course();
+    apron_tx = (int *)slice.data;
+    apron_ty = apron_tx + 1;
+    apron = (uint8_t *)(apron_ty + 1);
+    *apron_tx = 0x7fffffff;
+    *apron_ty = 0x7fffffff;
     return 0;
 }
 
-/* [world_init] Monta o corpo no spawn, o percurso fixo na slice de [arena_level], o checkpoint no spawn e a câmera com a mola parada. Devolve 0 se [arena_ready] servir. */
+/* [mark_checkpoint] Grava o pé no chão sob o tile de [MAP_CP_TX]. */
+static void mark_checkpoint(void)
+{
+    int world_x;
+
+    world_x = MAP_CP_TX * MAP_TILE;
+    *cp_cell_x = world_x / WORLD_VIEW;
+    *cp_x = (world_x - *cp_cell_x * WORLD_VIEW) << WORLD_SUB;
+    *cp_cell_y = 0;
+    *cp_y = (MAP_FLOOR_Y - WORLD_BODY_H) << WORLD_SUB;
+}
+
+/* [world_init] Monta o corpo no spawn, o apron de [map_at] na slice de [arena_level], o checkpoint no spawn e a câmera com a mola parada. Devolve 0 se [arena_ready] servir. */
 int world_init(void)
 {
     arena_slice slice;
@@ -951,7 +969,7 @@ int world_init(void)
     *life = LIFE_PLAY;
     *dead_hold = 0;
     row_count = 1;
-    if (solid_load() != 0) {
+    if (apron_bind() != 0) {
         return 1;
     }
     mark_spawn();
@@ -959,13 +977,12 @@ int world_init(void)
     return 0;
 }
 
-/* [world_reset] Recarrega o percurso, devolve o checkpoint ao spawn, põe o corpo lá e encosta a câmera. */
+/* [world_reset] Devolve o checkpoint ao spawn, recarrega o apron e põe o corpo lá. */
 void world_reset(void)
 {
     if (row_count < 1) {
         return;
     }
-    solid_course();
     mark_spawn();
     *life = LIFE_PLAY;
     *dead_hold = 0;
@@ -1006,6 +1023,33 @@ static int body_hits(int cell_x, int cell_y, int x, int y, int w, int h)
     return range_overlaps(bx, bx + bw, left, right) && range_overlaps(by, by + bh, top, bottom);
 }
 
+/* [apron_hits] Devolve 1 se o corpo cruza um tile desse kind no apron. */
+static int apron_hits(int kind)
+{
+    int i;
+    int dx;
+    int dy;
+    int x;
+    int y;
+
+    if (apron == 0 || apron_tx == 0) {
+        return 0;
+    }
+    for (i = 0; i < APRON_N; i++) {
+        if (apron[i] != kind) {
+            continue;
+        }
+        dx = (i % 3) - 1;
+        dy = (i / 3) - 1;
+        x = (*apron_tx + dx) * MAP_TILE;
+        y = (*apron_ty + dy) * MAP_TILE;
+        if (body_hits(0, 0, x, y, MAP_TILE, MAP_TILE)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* [body_fallen] Devolve 1 se os pés passaram de PIT_Y. */
 static int body_fallen(void)
 {
@@ -1030,6 +1074,7 @@ void world_tick(const actions *input)
         }
         return;
     }
+    apron_sync();
     if (input->move_down) {
         row_wall[0] = 0;
     }
@@ -1038,18 +1083,15 @@ void world_tick(const actions *input)
     body_slide();
     body_solve_x(input);
     body_solve_y();
-    if (body_fallen() || body_hits(SPIKE_CX, SPIKE_CY, SPIKE_X, SPIKE_Y, SPIKE_W, SPIKE_H)) {
+    if (body_fallen() || apron_hits(MAP_SPIKE)) {
         *life = LIFE_DYING;
         *dead_hold = DEATH_HOLD;
         return;
     }
-    if (body_hits(CP_CX, CP_CY, CP_X, CP_Y, CP_W, CP_H)) {
-        *cp_cell_x = CP_CX;
-        *cp_x = CP_STAND_X;
-        *cp_cell_y = CP_CY;
-        *cp_y = CP_STAND_Y;
+    if (apron_hits(MAP_CHECKPOINT)) {
+        mark_checkpoint();
     }
-    if (body_hits(EXIT_CX, EXIT_CY, EXIT_X, EXIT_Y, EXIT_W, EXIT_H)) {
+    if (apron_hits(MAP_EXIT)) {
         row_vx[0] = 0;
         row_vy[0] = 0;
         *life = LIFE_DONE;
@@ -1102,51 +1144,139 @@ void world_camera(int *x, int *y)
     *y = *cam_y >> WORLD_SUB;
 }
 
-/* [world_solid_count] Devolve quantos AABB estáticos a slice guarda. */
-int world_solid_count(void)
+/* [set_crosses] Devolve 1 se o tile set cruza a View em camx, camy. */
+static int set_crosses(int tx, int ty, int camx, int camy)
 {
-    return solid_count;
+    int x;
+    int y;
+
+    if (map_at(tx, ty) != MAP_SET) {
+        return 0;
+    }
+    x = tx * MAP_TILE;
+    y = ty * MAP_TILE;
+    return range_overlaps(x, x + MAP_TILE, camx, camx + WORLD_VIEW) &&
+           range_overlaps(y, y + MAP_TILE, camy, camy + WORLD_VIEW);
 }
 
-/* [world_solid_rect] Escreve o AABB index em pixels do mundo. Fora da contagem, zera a saída. */
+/* [world_solid_count] Devolve quantos tiles set cruzam a View. */
+int world_solid_count(void)
+{
+    int camx;
+    int camy;
+    int x0;
+    int x1;
+    int y0;
+    int y1;
+    int x;
+    int y;
+    int count;
+
+    if (cam_x == 0 || cam_y == 0) {
+        return 0;
+    }
+    camx = *cam_x >> WORLD_SUB;
+    camy = *cam_y >> WORLD_SUB;
+    x0 = tile_index(camx);
+    x1 = tile_index(camx + WORLD_VIEW - 1);
+    y0 = tile_index(camy);
+    y1 = tile_index(camy + WORLD_VIEW - 1);
+    count = 0;
+    for (y = y0; y <= y1; y++) {
+        for (x = x0; x <= x1; x++) {
+            if (!set_crosses(x, y, camx, camy)) {
+                continue;
+            }
+            count += 1;
+            if (count >= WORLD_SOLID_CAP) {
+                return count;
+            }
+        }
+    }
+    return count;
+}
+
+/* [world_solid_rect] Escreve o tile set index que cruza a View. Fora da contagem, zera a saída. */
 void world_solid_rect(int index, int *x, int *y, int *w, int *h)
 {
-    if (index < 0 || index >= solid_count) {
+    int camx;
+    int camy;
+    int x0;
+    int x1;
+    int y0;
+    int y1;
+    int tx;
+    int ty;
+    int seen;
+
+    if (index < 0 || cam_x == 0 || cam_y == 0) {
         *x = 0;
         *y = 0;
         *w = 0;
         *h = 0;
         return;
     }
-    *x = solid_cx[index] * WORLD_VIEW + solid_x[index];
-    *y = solid_cy[index] * WORLD_VIEW + solid_y[index];
-    *w = solid_w[index];
-    *h = solid_h[index];
+    camx = *cam_x >> WORLD_SUB;
+    camy = *cam_y >> WORLD_SUB;
+    x0 = tile_index(camx);
+    x1 = tile_index(camx + WORLD_VIEW - 1);
+    y0 = tile_index(camy);
+    y1 = tile_index(camy + WORLD_VIEW - 1);
+    seen = 0;
+    for (ty = y0; ty <= y1; ty++) {
+        for (tx = x0; tx <= x1; tx++) {
+            if (!set_crosses(tx, ty, camx, camy)) {
+                continue;
+            }
+            if (seen == index) {
+                *x = tx * MAP_TILE;
+                *y = ty * MAP_TILE;
+                *w = MAP_TILE;
+                *h = MAP_TILE;
+                return;
+            }
+            seen += 1;
+        }
+    }
+    *x = 0;
+    *y = 0;
+    *w = 0;
+    *h = 0;
 }
 
-/* [mark_rect] Escreve a marca em pixels do mundo. */
-static void mark_rect(int cell_x, int cell_y, int x, int y, int w, int h, int *ox, int *oy, int *ow, int *oh)
+/* [kind_rect] Escreve o primeiro tile desse kind. Sem tile, zera a saída. */
+static void kind_rect(int kind, int *x, int *y, int *w, int *h)
 {
-    *ox = cell_x * WORLD_VIEW + x;
-    *oy = cell_y * WORLD_VIEW + y;
-    *ow = w;
-    *oh = h;
+    int tx;
+    int ty;
+
+    if (!map_find(kind, &tx, &ty)) {
+        *x = 0;
+        *y = 0;
+        *w = 0;
+        *h = 0;
+        return;
+    }
+    *x = tx * MAP_TILE;
+    *y = ty * MAP_TILE;
+    *w = MAP_TILE;
+    *h = MAP_TILE;
 }
 
 /* [world_spike_rect] Escreve o spike em pixels do mundo. */
 void world_spike_rect(int *x, int *y, int *w, int *h)
 {
-    mark_rect(SPIKE_CX, SPIKE_CY, SPIKE_X, SPIKE_Y, SPIKE_W, SPIKE_H, x, y, w, h);
+    kind_rect(MAP_SPIKE, x, y, w, h);
 }
 
 /* [world_checkpoint_rect] Escreve o volume do checkpoint em pixels do mundo. */
 void world_checkpoint_rect(int *x, int *y, int *w, int *h)
 {
-    mark_rect(CP_CX, CP_CY, CP_X, CP_Y, CP_W, CP_H, x, y, w, h);
+    kind_rect(MAP_CHECKPOINT, x, y, w, h);
 }
 
 /* [world_exit_rect] Escreve a saída em pixels do mundo. */
 void world_exit_rect(int *x, int *y, int *w, int *h)
 {
-    mark_rect(EXIT_CX, EXIT_CY, EXIT_X, EXIT_Y, EXIT_W, EXIT_H, x, y, w, h);
+    kind_rect(MAP_EXIT, x, y, w, h);
 }

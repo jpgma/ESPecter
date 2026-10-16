@@ -52,6 +52,7 @@ add_executable(especter_pc
     "${ROOT}/game/arena.c"
     "${ROOT}/game/body_sheet.c"
     "${ROOT}/game/palette.c"
+    "${ROOT}/game/map.c"
     "${ROOT}/game/world.c"
     "${ROOT}/host/engine_host.cpp"
     ${ENGINE_SRCS}

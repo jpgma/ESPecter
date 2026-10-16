@@ -13,9 +13,9 @@ extern "C" {
 #define WORLD_BODY_H 12
 #define WORLD_SOLID_CAP 256
 
-/* [world_init] Monta o corpo no spawn, o percurso fixo na slice de [arena_level], o checkpoint no spawn e a câmera com a mola parada. Devolve 0 se [arena_ready] servir. */
+/* [world_init] Monta o corpo no spawn, o apron de [map_at] na slice de [arena_level], o checkpoint no spawn e a câmera com a mola parada. Devolve 0 se [arena_ready] servir. */
 int world_init(void);
-/* [world_reset] Recarrega o percurso, devolve o checkpoint ao spawn, põe o corpo lá e encosta a câmera. */
+/* [world_reset] Devolve o checkpoint ao spawn, recarrega o apron e põe o corpo lá. */
 void world_reset(void);
 /* [world_tick] Integra um tick fixo. O pit e o spike abrem 252 ms de morte e depois [body_place_at] no checkpoint. A saída congela até [world_reset]. A mola e [body_pose] só correm vivo. */
 void world_tick(const actions *input);
@@ -25,9 +25,9 @@ void world_rect(int *x, int *y, int *w, int *h);
 void world_body_pose(int *clip, int *frame, int *face);
 /* [world_camera] Escreve a origem da View em pixels do mundo. */
 void world_camera(int *x, int *y);
-/* [world_solid_count] Devolve quantos AABB estáticos a slice guarda. */
+/* [world_solid_count] Devolve quantos tiles set cruzam a View. */
 int world_solid_count(void);
-/* [world_solid_rect] Escreve o AABB index em pixels do mundo. Fora da contagem, zera a saída. */
+/* [world_solid_rect] Escreve o tile set index que cruza a View. Fora da contagem, zera a saída. */
 void world_solid_rect(int index, int *x, int *y, int *w, int *h);
 /* [world_spike_rect] Escreve o spike em pixels do mundo. */
 void world_spike_rect(int *x, int *y, int *w, int *h);
