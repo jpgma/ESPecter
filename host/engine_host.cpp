@@ -124,13 +124,15 @@ public:
         note_frame(delta_time);
     }
 
-    /* [rect_scene::draw] Pinta o ground, o Rect, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No device a cor vem de [link_ground]. */
+    /* [rect_scene::draw] Pinta o ground, os sólidos, o Rect, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No device a cor do ground vem de [link_ground]. */
     void draw(pixelroot32::graphics::Renderer &renderer) override
     {
         int x;
         int y;
         int w;
         int h;
+        int count;
+        int i;
 
         world_rect(&x, &y, &w, &h);
 #ifdef PLATFORM_NATIVE
@@ -138,6 +140,16 @@ public:
 #else
         renderer.drawFilledRectangleW(0, 0, WORLD_VIEW, WORLD_VIEW, link_ground());
 #endif
+        count = world_solid_count();
+        for (i = 0; i < count; i++) {
+            int sx;
+            int sy;
+            int sw;
+            int sh;
+
+            world_solid_rect(i, &sx, &sy, &sw, &sh);
+            renderer.drawFilledRectangle(sx, sy, sw, sh, pixelroot32::graphics::Color::Black);
+        }
         renderer.drawFilledRectangle(x, y, w, h, pixelroot32::graphics::Color::White);
 #ifndef PLATFORM_NATIVE
         {

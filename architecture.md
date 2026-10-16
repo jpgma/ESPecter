@@ -81,7 +81,7 @@ Reference is Nidhogg (2014), not Nidhogg 2. Flat colors, chunky silhouettes, a d
 - The view is square. When a camera exists, it leads in the facing direction.
 - The ninja is about 16 pixels tall (about 1.8 mm on this 1.54" panel). The boilerplate rectangle is 16×16. Later animation is idle, run, jump, death. No skeletal animation.
 
-The figure is white. On the PC the ground is dark green. On the device the ground is the link, the same three flat colors as the pademu status bar: red `(180, 0, 0)` while the central is down, amber `(220, 180, 0)` while it scans, and green once Pad Emu is linked. That green is `(0, 140, 32)`, darker than the pademu bar `(0, 180, 40)`.
+The figure is white. Static platforms are black. On the PC the ground is dark green. On the device the ground is the link, the same three flat colors as the pademu status bar: red `(180, 0, 0)` while the central is down, amber `(220, 180, 0)` while it scans, and green once Pad Emu is linked. That green is `(0, 140, 32)`, darker than the pademu bar `(0, 180, 40)`.
 
 ## Sound
 
@@ -133,19 +133,19 @@ Derived, for either source:
 
 ## Physics
 
-N++ is the movement. The body is a 16×16 kinematic AABB. [game/world.c](game/world.c) integrates one fixed tick: accelerate or friction on x, gravity on y, cap a latched fall, move x and respond, move y and respond, then a jump impulse. `world_tick` takes no delta. One pixel is 256 subpixels, stored as `int` on the first world row, with velocity, the four border contacts, and the wall latch (`-1` left, `1` right, `0` none).
+N++ is the movement. The body is a 16×16 kinematic AABB. [game/world.c](game/world.c) integrates one fixed tick: accelerate or friction on x, gravity on y, cap a latched fall, move x and respond, move y and respond, then a jump impulse. `world_tick` takes no delta. One pixel is 256 subpixels, stored as `int` on the first world row, with velocity, the four border contacts, and the wall latch (`-1` left, `1` right, `0` none). Up to 32 static AABBs live in the level slice as pixel rects.
 
 The host turns wall-clock milliseconds into ticks. `Engine::update` passes a whole-millisecond delta. The host adds it to an accumulator and calls `world_tick` once per 16 ms, at most four times per update. A zero delta adds nothing. Time left under 16 ms stays. If four ticks leave 16 ms or more, that remainder is dropped. Sixteen milliseconds is the step this clock can mark, 62.5 Hz, not 1000/60. Present rate does not scale velocity. The number in the corner is presents, not sim ticks.
 
 Feel, per tick: horizontal accel and friction 64 subpixels, max run 768 (3 px, about 188 px/s). Jump impulse −2048. Gravity 128 while rising with jump held, 256 otherwise. Fall caps at 2048, under the body, so a later 16 px tile is not skipped in one tick. A held jump reaches about 64 px. Releasing jump early uses the heavier gravity. While the wall latch holds and the body is falling, vy caps at 256 (1 px), starting the tick after the grab. A wall jump sets vx away from that edge and vy to −1448, the integer of 2048 / sqrt(2). Held, that rise is about 32 px; releasing early is about half. While |vx| is above 768, x input is ignored and vx loses 64 per tick down to the run cap. Only the wall jump produces that speed. This is the cage tune.
 
-The four borders of the view stop the body and zero that axis. No bounce. Crossing the left or right edge sets the wall latch and zeros vx. While the latch holds, left and right do not change vx. The ceiling zeros vy and leaves the latch. The floor clears the latch, so a corner jump is the floor jump. `move_down` held clears the latch, and a clamp on that tick does not set it again. Releasing down does not re-latch until vx crosses that edge. Holding into the wall after the release does that on the following tick. The floor is the bottom edge, not a drawn tile. D-pad up does not move the body. With a clear snapshot the body still falls and rests on the bottom edge.
+The four borders of the view and the static AABBs stop the body and zero that axis. No bounce. Overlap on an axis is the strict interval test from [N Tutorial A](https://www.metanetsoftware.com/2016/n-tutorial-a-collision-detection-and-response) section 2: touching an edge is not a hit, so a body standing on a top does not grab the sides. The body moves on x and projects on x only, then moves on y and projects on y only. Solving the axes apart keeps a deep fall from being shoved sideways, which section 4 shows the shortest overlap can do. The stop is the face crossed on that move, so a rect thinner than the step is not tunneled (section 5). A body that starts the tick inside a solid is pushed out on the current axis through the shorter face. The shallowest solid goes first, and that repeats until the body is out. Crossing a left face, the view's or a solid's, sets the wall latch to −1 and zeros vx. A right face sets it to 1. While the latch holds, left and right do not change vx. A ceiling, the view's or a solid's underside, zeros vy and leaves the latch. A floor, the view's bottom or a solid's top, clears the latch, so a corner jump is the floor jump. After the vertical move, the latch stays only while a one-subpixel nudge into that side still overlaps a face or the view border. Sliding off the bottom of a solid releases it on that tick, before the jump. `move_down` held clears the latch, and a clamp on that tick does not set it again. Releasing down does not re-latch until vx crosses that face again. Holding into the wall after the release does that on the following tick. D-pad up does not move the body. With a clear snapshot the body still falls and rests on the bottom edge, because the spawn column is clear of solids.
 
-Tiles are still later: [N Tutorial A](https://www.metanetsoftware.com/2016/n-tutorial-a-collision-detection-and-response), move then respond, horizontal and vertical apart, swept tests so a fast fall does not tunnel. Clamping into the view is exact for these four edges.
+Square tiles, wedges, one-way platforms, and hazards are still later. The view border uses the same face test as a solid.
 
-Mechanic reference, not code to port: `d:\Repos\refs\school-n--master`. Square tiles, wedges, and hazards as overlap are still later. Do not take its classes, `std::vector`, per-overlap `new`, variable `deltaTime`, skeleton, or its speed constants.
+Mechanic reference, not code to port: `d:\Repos\refs\school-n--master`. The latch nudge is that demo's probe into the wall normal, and an inside push takes the shallowest overlap. Do not take its classes, `std::vector`, per-overlap `new`, variable `deltaTime`, skeleton, or its speed constants.
 
-`PIXELROOT32_ENABLE_PHYSICS` stays 0. One collision truth, and it is game code. The ninja is kinematic. SoA rows live in the arena. The next physics slice is solid square tiles plus this body AABB.
+`PIXELROOT32_ENABLE_PHYSICS` stays 0. One collision truth, and it is game code. The ninja is kinematic. SoA rows live in the arena.
 
 ## Memory
 
@@ -176,7 +176,7 @@ The device block comes from `heap_caps_malloc` with `MALLOC_CAP_SPIRAM`, after B
 | Logical buffer | internal | 57600 | ST7789 drawer | 240×240 8bpp. Not a second RGB565 frame |
 | Game arena | PSRAM | 65536 | `arena` | Never freed |
 | `world` slice | arena | 4096 | `world` | SoA. The body keeps subpixel position, velocity, border contact, and the wall latch on the first row |
-| `level` slice | arena | 32768 | reserved | Empty in this binary |
+| `level` slice | arena | 32768 | `world` | SoA of up to 32 static AABBs, 512 bytes used. The rest stays empty |
 | `scratch` slice | arena | 16384 | reserved | Overwritten in place. The offset does not move |
 | Spare | arena | 12288 | `arena` | Growing a slice takes from here and updates this table |
 
@@ -213,3 +213,4 @@ Boot log, after the engine buffer exists: free internal heap, largest free inter
 | 2026-10-15 | Wall latch on the side edges. Slide cap 256. Wall jump is 1448 on the diagonal. Speed above the run cap bleeds by 64. move_down releases the latch |
 | 2026-10-15 | Per-frame clear resets the palette and leaves the 8bpp indices. The full-view ground is the wipe |
 | 2026-10-15 | Device draws battery percent at the top-left from the GPIO1 divider. No fuel gauge. The PC build has no battery line |
+| 2026-10-15 | Static AABBs, cap 32, in the level slice. Four faces use the cage latch, floor, and ceiling. The sweep stops on the face crossed that tick |

@@ -663,6 +663,9 @@ support a decision. Keep links to the detailed agent report.
   2026-10-15   Wall latch, slide cap 256, diagonal 1448.   architecture.md                  medium       The cage feel is retuned
                Speed above the run cap bleeds by 64.
                Down releases the latch
+  2026-10-15   Static AABBs, cap 32, in the level slice.    architecture.md                  medium       The cage feel is retuned
+               Four faces use the latch, floor, and
+               ceiling. The sweep stops on the crossed face
 
 ## 7. Research execution plan
 
