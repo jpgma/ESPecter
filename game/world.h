@@ -17,7 +17,7 @@ extern "C" {
 int world_init(void);
 /* [world_reset] Devolve o checkpoint ao spawn, recarrega o apron e põe o corpo lá. */
 void world_reset(void);
-/* [world_tick] Integra um tick fixo. O pit e o spike abrem 252 ms de morte e depois [body_place_at] no checkpoint. A saída congela até [world_reset]. A mola e [body_pose] só correm vivo. */
+/* [world_tick] Integra um tick fixo. move_down solta o latch e atravessa o one-way. O pit e o spike abrem 252 ms de morte e depois [body_place_at] no checkpoint. A saída congela até [world_reset]. A mola e [body_pose] só correm vivo. */
 void world_tick(const actions *input);
 /* [world_rect] Escreve a posição no mundo, em pixels, e o tamanho do Rect. */
 void world_rect(int *x, int *y, int *w, int *h);
@@ -25,9 +25,9 @@ void world_rect(int *x, int *y, int *w, int *h);
 void world_body_pose(int *clip, int *frame, int *face);
 /* [world_camera] Escreve a origem da View em pixels do mundo. */
 void world_camera(int *x, int *y);
-/* [world_solid_count] Devolve quantos tiles set cruzam a View. */
+/* [world_solid_count] Devolve quantos tiles set ou one-way cruzam a View. */
 int world_solid_count(void);
-/* [world_solid_rect] Escreve o tile set index que cruza a View. Fora da contagem, zera a saída. */
+/* [world_solid_rect] Escreve o tile set ou a faixa one-way que cruza a View. Fora da contagem, zera a saída. */
 void world_solid_rect(int index, int *x, int *y, int *w, int *h);
 /* [world_spike_rect] Escreve o spike em pixels do mundo. */
 void world_spike_rect(int *x, int *y, int *w, int *h);

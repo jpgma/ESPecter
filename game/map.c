@@ -1,6 +1,7 @@
 #include "map.h"
 
 /* Célula 0: chão na fileira 14, muros nas colunas 5 e 9, plataformas nas laterais.
+   A fileira 11, colunas 0 a 3, é one-way.
    Célula 1: fosso de 3 tiles, depois o chão, um spike e um checkpoint.
    Células 2 a 7: chão. A saída é o tile da célula 2. O resto da faixa é vazio. */
 
@@ -37,10 +38,10 @@ static const uint8_t strip[MAP_H * MAP_W] = {
     [9 * MAP_W + 9] = MAP_SET,
     [10 * MAP_W + 5] = MAP_SET,
     [10 * MAP_W + 9] = MAP_SET,
-    [11 * MAP_W + 0] = MAP_SET,
-    [11 * MAP_W + 1] = MAP_SET,
-    [11 * MAP_W + 2] = MAP_SET,
-    [11 * MAP_W + 3] = MAP_SET,
+    [11 * MAP_W + 0] = MAP_ONEWAY,
+    [11 * MAP_W + 1] = MAP_ONEWAY,
+    [11 * MAP_W + 2] = MAP_ONEWAY,
+    [11 * MAP_W + 3] = MAP_ONEWAY,
     [11 * MAP_W + 5] = MAP_SET,
     [11 * MAP_W + 9] = MAP_SET,
     [11 * MAP_W + 11] = MAP_SET,

@@ -15,6 +15,8 @@
 #define MAP_SPIKE 2
 #define MAP_CHECKPOINT 3
 #define MAP_EXIT 4
+#define MAP_ONEWAY 5
+#define MAP_LIP 4
 
 #define MAP_FLOOR_ROW 14
 #define MAP_FLOOR_Y (MAP_FLOOR_ROW * MAP_TILE)

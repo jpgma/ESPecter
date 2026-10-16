@@ -150,6 +150,27 @@ static int apron_set_box(int index, int *left, int *top, int *right, int *bottom
     return 1;
 }
 
+/* [apron_oneway_top] Escreve o topo do tile one-way do apron em subpixels. Devolve 0 se o slot não for one-way. */
+static int apron_oneway_top(int index, int *left, int *top, int *right)
+{
+    int dx;
+    int dy;
+    int x;
+    int y;
+
+    if (apron == 0 || apron_tx == 0 || index < 0 || index >= APRON_N || apron[index] != MAP_ONEWAY) {
+        return 0;
+    }
+    dx = (index % 3) - 1;
+    dy = (index / 3) - 1;
+    x = (*apron_tx + dx) * MAP_TILE;
+    y = (*apron_ty + dy) * MAP_TILE;
+    *left = x << WORLD_SUB;
+    *top = y << WORLD_SUB;
+    *right = (x + MAP_TILE) << WORLD_SUB;
+    return 1;
+}
+
 /* [axis_out] Devolve a posição que sai pela face mais curta. side recebe 1 na mínima e -1 na máxima. */
 static int axis_out(int pos, int size, int min_edge, int max_edge, int *side)
 {
@@ -343,8 +364,8 @@ static int body_stop_x(int x0, int dest, int y, int bw, int bh, int *hit)
     return best;
 }
 
-/* [body_stop_y] Devolve o y composto na primeira face horizontal cruzada. hit recebe -1 teto, 1 chão ou 0. */
-static int body_stop_y(int y0, int dest, int x, int bw, int bh, int *hit)
+/* [body_stop_y] Devolve o y na primeira face cruzada. O one-way só para a queda vinda de cima, e skip ignora esse topo. hit recebe -1 teto, 1 chão ou 0. */
+static int body_stop_y(int y0, int dest, int x, int bw, int bh, int skip, int *hit)
 {
     int best;
     int i;
@@ -374,6 +395,21 @@ static int body_stop_y(int y0, int dest, int x, int bw, int bh, int *hit)
             if (y0 >= bottom && dest < bottom && face > best) {
                 best = face;
                 *hit = -1;
+            }
+        }
+    }
+    if (!skip && dest > y0) {
+        for (i = 0; i < APRON_N; i++) {
+            if (!apron_oneway_top(i, &left, &top, &right)) {
+                continue;
+            }
+            if (!range_overlaps(x, x + bw, left, right)) {
+                continue;
+            }
+            face = top - bh;
+            if (y0 + bh <= top && dest + bh > top && face < best) {
+                best = face;
+                *hit = 1;
             }
         }
     }
@@ -469,8 +505,8 @@ static void cam_note_ground(void)
     }
 }
 
-/* [body_solve_y] Soma vy, projeta nas faces horizontais, separa a célula, solta o latch no chão ou na saída do muro, e o chão chama [cam_note_ground]. */
-static void body_solve_y(void)
+/* [body_solve_y] Soma vy, projeta nas faces, separa a célula e solta o latch no chão ou na saída do muro. move_down ignora o topo one-way. O chão chama [cam_note_ground]. */
+static void body_solve_y(const actions *input)
 {
     int x0;
     int y0;
@@ -485,7 +521,7 @@ static void body_solve_y(void)
     bh = row_h[0] << WORLD_SUB;
     row_hit_floor[0] = 0;
     row_hit_ceil[0] = 0;
-    y = body_stop_y(y0, y0 + row_vy[0], x0, bw, bh, &hit);
+    y = body_stop_y(y0, y0 + row_vy[0], x0, bw, bh, input->move_down, &hit);
     split_sub(y, &row_cell_y[0], &row_y[0]);
     if (hit > 0) {
         row_vy[0] = 0;
@@ -1056,7 +1092,7 @@ static int body_fallen(void)
     return cam_feet() > (PIT_Y << WORLD_SUB);
 }
 
-/* [world_tick] Integra um tick fixo. O pit e o spike abrem 252 ms de morte e depois [body_place_at] no checkpoint. A saída congela até [world_reset]. A mola e [body_pose] só correm vivo. */
+/* [world_tick] Integra um tick fixo. move_down solta o latch e atravessa o one-way. O pit e o spike abrem 252 ms de morte e depois [body_place_at] no checkpoint. A saída congela até [world_reset]. A mola e [body_pose] só correm vivo. */
 void world_tick(const actions *input)
 {
     if (row_count < 1 || input == 0) {
@@ -1082,7 +1118,7 @@ void world_tick(const actions *input)
     body_gravity(input);
     body_slide();
     body_solve_x(input);
-    body_solve_y();
+    body_solve_y(input);
     if (body_fallen() || apron_hits(MAP_SPIKE)) {
         *life = LIFE_DYING;
         *dead_hold = DEATH_HOLD;
@@ -1144,22 +1180,41 @@ void world_camera(int *x, int *y)
     *y = *cam_y >> WORLD_SUB;
 }
 
-/* [set_crosses] Devolve 1 se o tile set cruza a View em camx, camy. */
+/* [solid_box] Escreve o retângulo do tile set, ou os 4 px do topo se for one-way. Devolve 0 se o kind não entra na lista. */
+static int solid_box(int tx, int ty, int *x, int *y, int *w, int *h)
+{
+    int kind;
+
+    kind = map_at(tx, ty);
+    if (kind != MAP_SET && kind != MAP_ONEWAY) {
+        return 0;
+    }
+    *x = tx * MAP_TILE;
+    *y = ty * MAP_TILE;
+    *w = MAP_TILE;
+    *h = MAP_TILE;
+    if (kind == MAP_ONEWAY) {
+        *h = MAP_LIP;
+    }
+    return 1;
+}
+
+/* [set_crosses] Devolve 1 se o tile set ou a faixa one-way cruza a View em camx, camy. */
 static int set_crosses(int tx, int ty, int camx, int camy)
 {
     int x;
     int y;
+    int w;
+    int h;
 
-    if (map_at(tx, ty) != MAP_SET) {
+    if (!solid_box(tx, ty, &x, &y, &w, &h)) {
         return 0;
     }
-    x = tx * MAP_TILE;
-    y = ty * MAP_TILE;
-    return range_overlaps(x, x + MAP_TILE, camx, camx + WORLD_VIEW) &&
-           range_overlaps(y, y + MAP_TILE, camy, camy + WORLD_VIEW);
+    return range_overlaps(x, x + w, camx, camx + WORLD_VIEW) &&
+           range_overlaps(y, y + h, camy, camy + WORLD_VIEW);
 }
 
-/* [world_solid_count] Devolve quantos tiles set cruzam a View. */
+/* [world_solid_count] Devolve quantos tiles set ou one-way cruzam a View. */
 int world_solid_count(void)
 {
     int camx;
@@ -1196,7 +1251,7 @@ int world_solid_count(void)
     return count;
 }
 
-/* [world_solid_rect] Escreve o tile set index que cruza a View. Fora da contagem, zera a saída. */
+/* [world_solid_rect] Escreve o tile set ou a faixa one-way que cruza a View. Fora da contagem, zera a saída. */
 void world_solid_rect(int index, int *x, int *y, int *w, int *h)
 {
     int camx;
@@ -1229,10 +1284,12 @@ void world_solid_rect(int index, int *x, int *y, int *w, int *h)
                 continue;
             }
             if (seen == index) {
-                *x = tx * MAP_TILE;
-                *y = ty * MAP_TILE;
-                *w = MAP_TILE;
-                *h = MAP_TILE;
+                if (!solid_box(tx, ty, x, y, w, h)) {
+                    *x = 0;
+                    *y = 0;
+                    *w = 0;
+                    *h = 0;
+                }
                 return;
             }
             seen += 1;
