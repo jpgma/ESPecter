@@ -17,6 +17,7 @@
 #ifdef PLATFORM_NATIVE
 #include <SDL2/SDL.h>
 #else
+#include "battery.h"
 #include "pad_link.h"
 #include "st7789_drawer.h"
 
@@ -123,7 +124,7 @@ public:
         note_frame(delta_time);
     }
 
-    /* [rect_scene::draw] Pinta o ground, o Rect e o FPS no canto superior direito. No device a cor vem de [link_ground]. */
+    /* [rect_scene::draw] Pinta o ground, o Rect, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No device a cor vem de [link_ground]. */
     void draw(pixelroot32::graphics::Renderer &renderer) override
     {
         int x;
@@ -138,6 +139,18 @@ public:
         renderer.drawFilledRectangleW(0, 0, WORLD_VIEW, WORLD_VIEW, link_ground());
 #endif
         renderer.drawFilledRectangle(x, y, w, h, pixelroot32::graphics::Color::White);
+#ifndef PLATFORM_NATIVE
+        {
+            const int pct = battery_percent();
+
+            if (pct >= 0) {
+                char label[16];
+
+                std::snprintf(label, sizeof label, "%d%%", pct);
+                renderer.drawText(label, 1, 0, pixelroot32::graphics::Color::White, 1);
+            }
+        }
+#endif
         if (g_fps >= 0) {
             char label[16];
             int text_w;

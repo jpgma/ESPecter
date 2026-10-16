@@ -43,7 +43,7 @@ On this target [graphics/DisplayConfig.h](third_party/pixelroot32/include/graphi
 
 Compile flags: C++17, no exceptions, no RTTI, `PIXELROOT32_NO_TFT_ESPI`, `PIXELROOT32_NO_I2S_AUDIO`, and `PIXELROOT32_ENABLE_AUDIO`, `PHYSICS`, `PARTICLES`, `UI_SYSTEM`, `TOUCH`, `SCENE_TRANSITIONS`, `CAMERA_EFFECTS`, and `STATIC_TILEMAP_FB_CACHE` all 0.
 
-The PC build defines `PLATFORM_NATIVE` and uses the engine's SDL2 drawer. It does not compile the ST7789 drawer or the Arduino shim. The window title is ESPecter. Both targets draw the present rate at the top-right, in the engine default `FONT_5X7` at size 1. That glyph is 5×7 with 1 px of spacing, and size 1 is the smallest `drawText` still draws.
+The PC build defines `PLATFORM_NATIVE` and uses the engine's SDL2 drawer. It does not compile the ST7789 drawer or the Arduino shim. The window title is ESPecter. Both targets draw the present rate at the top-right, in the engine default `FONT_5X7` at size 1. That glyph is 5×7 with 1 px of spacing, and size 1 is the smallest `drawText` still draws. The device also draws the pack percent at the top-left, same font and size, as `80%`. The PC build has no battery line.
 
 ## Hardware consequences
 
@@ -54,6 +54,7 @@ The PC build defines `PLATFORM_NATIVE` and uses the engine's SDL2 drawer. It doe
 - PSRAM is 8 MB octal. The game arena is one 64 KB block here. The rest stays free so a stray heap allocation is visible.
 - Flash is 16 MB quad, not OPI. `sdkconfig.defaults` sets that.
 - `BAT_EN` (GPIO2) is driven high before any blocking call. USB Serial/JTAG dies in deep sleep. There is no I2C fuel gauge. Deep sleep is not used.
+- VBAT is GPIO1 on ADC1 channel 0, attenuation 6 dB. The divider is ×3 (R27 200 kΩ / R32 100 kΩ). The device averages eight calibrated reads about once a second and maps pack millivolts on a resting single-cell curve from 3.27 V (0%) to 4.20 V (100%). Load sags that number. While `CHG_STAT` (GPIO3) is low the cell is charging, so the same curve reads high. A failed ADC leaves the corner blank.
 - One I2C bus (GPIO41/42): QMI8658A `0x6B`, CST816D `0x15`, ES8311 `0x18`, ES7210 `0x40`. No second bus. This binary does not init I2C, so those devices stay down until one owner exists. Touch is one finger. The IMU has no magnetometer, so yaw is not observable.
 - PLUS is GPIO4 and stays unread. BOOT is GPIO0, active low, configured as an input with pull-up after the app is up. A press terminates the Pad Emu link and scans again. The sample ignores the pin until it has been seen released, then accepts one press after two pressed samples 20 ms apart. Holding it does not repeat. PWR (GPIO5) is the power latch, not a game button. A press fades the backlight off or back on.
 - Wi-Fi is not started. On IDF 5.5 `ESP_WIFI_ENABLED` has no prompt, so the wifi library stays linked because the BT component requires it. This binary does not call `esp_wifi_init`, so that DMA is not allocated.
@@ -183,7 +184,7 @@ Boot log, after the engine buffer exists: free internal heap, largest free inter
 
 ## Runtime
 
-`app_main` drives `BAT_EN` high, starts NVS and the NimBLE central, creates the arena, then `engine_host_run`. On the device, `Engine::run` paints one frame and returns, so the host calls it in a loop. On the PC, that call already loops until the window closes. The drawer fades the backlight on after the panel is up. PWR fades it off or back on. The PC `main` creates the arena and calls the same host. Neither target inits I2C, Wi-Fi, the codec, or the IMU.
+`app_main` drives `BAT_EN` high, opens the VBAT ADC, starts NVS and the NimBLE central, creates the arena, then `engine_host_run`. On the device, `Engine::run` paints one frame and returns, so the host calls it in a loop. On the PC, that call already loops until the window closes. The drawer fades the backlight on after the panel is up. PWR fades it off or back on. The PC `main` creates the arena and calls the same host. Neither target inits I2C, Wi-Fi, the codec, or the IMU.
 
 ## Decision log
 
@@ -211,3 +212,4 @@ Boot log, after the engine buffer exists: free internal heap, largest free inter
 | 2026-10-15 | Present uses two 16-row DMA bands so the next band fills while the previous is on the wire |
 | 2026-10-15 | Wall latch on the side edges. Slide cap 256. Wall jump is 1448 on the diagonal. Speed above the run cap bleeds by 64. move_down releases the latch |
 | 2026-10-15 | Per-frame clear resets the palette and leaves the 8bpp indices. The full-view ground is the wipe |
+| 2026-10-15 | Device draws battery percent at the top-left from the GPIO1 divider. No fuel gauge. The PC build has no battery line |

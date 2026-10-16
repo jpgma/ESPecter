@@ -16,6 +16,7 @@ especter_pixelroot32_sources(ENGINE_SRCS "${PR32}" OFF)
 idf_component_register(
     SRCS
         "app_main.c"
+        "battery.c"
         "pad_link.c"
         "actions_pad.c"
         "${ROOT}/game/arena.c"
@@ -33,6 +34,7 @@ idf_component_register(
         "${APU}/include"
     REQUIRES
         esp_lcd
+        esp_adc
         driver
         esp_timer
         bt

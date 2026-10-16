@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 #include "arena.h"
+#include "battery.h"
 #include "engine_host.h"
 #include "pad_link.h"
 
@@ -25,13 +26,14 @@ static void nvs_start(void)
     ESP_ERROR_CHECK(err);
 }
 
-/* [app_main] Liga o BAT_EN e então [nvs_start], [pad_link_start], [arena_init] e [engine_host_run]. */
+/* [app_main] Liga o BAT_EN e então [battery_start], [nvs_start], [pad_link_start], [arena_init] e [engine_host_run]. */
 void app_main(void)
 {
     void *block;
 
     gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT);
     gpio_set_level(GPIO_NUM_2, 1);
+    battery_start();
 
     nvs_start();
     pad_link_start();
