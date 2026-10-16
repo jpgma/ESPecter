@@ -23,8 +23,10 @@ namespace {
 
 constexpr int k_width = 240;
 constexpr int k_height = 240;
-constexpr int k_band_rows = 16;
+constexpr int k_band_rows = 120;
 constexpr int k_band_pixels = k_width * k_band_rows;
+/* O registrador de comprimento do DMA no S3 aceita no máximo 32768 bytes por transação. */
+constexpr int k_dma_max = 32768;
 constexpr gpio_num_t k_cs = GPIO_NUM_21;
 constexpr gpio_num_t k_clk = GPIO_NUM_38;
 constexpr gpio_num_t k_mosi = GPIO_NUM_39;
@@ -41,6 +43,8 @@ constexpr int k_bl_scan_ms = 20;
 constexpr uint32_t k_bl_stack = 3072;
 
 const char *k_tag = "st7789";
+uint16_t *g_bands;
+uint8_t *g_pixels;
 esp_lcd_panel_handle_t g_lcd;
 int g_bl_on = 1;
 int g_bl_armed;
@@ -226,6 +230,18 @@ bool spi_done_cb(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data
 
 } // namespace
 
+/* [st7789_alloc_bands] Reserva os bands DMA e os índices 8bpp antes do NimBLE. Aborta se o heap interno não servir. */
+extern "C" void st7789_alloc_bands(void)
+{
+    g_bands = static_cast<uint16_t *>(heap_caps_malloc(static_cast<size_t>(k_band_pixels) * 2u * sizeof(uint16_t),
+                                                       MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+    g_pixels = static_cast<uint8_t *>(heap_caps_malloc(static_cast<size_t>(k_width * k_height), MALLOC_CAP_INTERNAL));
+    if (g_bands == nullptr || g_pixels == nullptr) {
+        ESP_LOGE(k_tag, "band alloc failed");
+        std::abort();
+    }
+}
+
 namespace especter {
 
 /* [st7789_lit] Devolve 1 enquanto o fade pedido está aceso ou o duty ainda não chegou a 0. */
@@ -310,7 +326,7 @@ void st7789_pwr_ready(void)
     ESP_ERROR_CHECK(gpio_config(&key));
 }
 
-/* [st7789_drawer] Deixa o panel fechado. [st7789_drawer::init] aloca o framebuffer. */
+/* [st7789_drawer] Deixa o panel fechado. [st7789_alloc_bands] reserva o framebuffer. */
 st7789_drawer::st7789_drawer()
     : pixels(nullptr), band(nullptr), ready(0), panel(nullptr), panel_io(nullptr), spi_done(nullptr)
 {
@@ -334,7 +350,7 @@ uint8_t st7789_drawer::index_for(uint16_t color)
     return 0;
 }
 
-/* [st7789_drawer::init] Sobe o SPI3, dois bands DMA e o panel, zera os índices uma vez, depois [backlight_start]. */
+/* [st7789_drawer::init] Sobe o SPI3 e o panel com os buffers de [st7789_alloc_bands], zera os índices uma vez, depois [backlight_start]. */
 void st7789_drawer::init()
 {
     spi_bus_config_t buscfg = {};
@@ -354,12 +370,12 @@ void st7789_drawer::init()
     physicalWidth = k_width;
     physicalHeight = k_height;
 
-    pixels = static_cast<uint8_t *>(heap_caps_malloc(k_width * k_height, MALLOC_CAP_INTERNAL));
-    band = static_cast<uint16_t *>(heap_caps_malloc(k_band_pixels * 2 * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
-    if (pixels == nullptr || band == nullptr) {
+    if (g_pixels == nullptr || g_bands == nullptr) {
         ESP_LOGE(k_tag, "framebuffer alloc failed");
         std::abort();
     }
+    pixels = g_pixels;
+    band = g_bands;
     std::memset(pixels, 0, static_cast<size_t>(k_width * k_height));
     clearBuffer();
 
@@ -368,7 +384,7 @@ void st7789_drawer::init()
     buscfg.sclk_io_num = k_clk;
     buscfg.quadwp_io_num = -1;
     buscfg.quadhd_io_num = -1;
-    buscfg.max_transfer_sz = k_band_pixels * static_cast<int>(sizeof(uint16_t));
+    buscfg.max_transfer_sz = k_dma_max;
     ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
 
     io_cfg.cs_gpio_num = k_cs;

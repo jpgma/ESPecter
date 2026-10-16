@@ -31,12 +31,12 @@ void st7789_pwr_ready(void);
 
 class st7789_drawer : public pixelroot32::graphics::BaseDrawSurface {
 public:
-    /* [st7789_drawer] Deixa o panel fechado. [st7789_drawer::init] aloca o framebuffer. */
+    /* [st7789_drawer] Deixa o panel fechado. [st7789_alloc_bands] reserva o framebuffer. */
     st7789_drawer();
     /* [st7789_drawer::~st7789_drawer] Não libera o panel. O LCD fica ligado até o reset. */
     ~st7789_drawer() override;
 
-    /* [st7789_drawer::init] Sobe o SPI3, dois bands DMA e o panel, zera os índices uma vez, depois [backlight_start]. */
+    /* [st7789_drawer::init] Sobe o SPI3 e o panel com os buffers de [st7789_alloc_bands], zera os índices uma vez, depois [backlight_start]. */
     void init() override;
     /* [st7789_drawer::clearBuffer] Não mexe na palette nem nos índices. A cena cobre a View. */
     void clearBuffer() override;

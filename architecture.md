@@ -49,7 +49,7 @@ The PC build defines `PLATFORM_NATIVE` and uses the engine's SDL2 drawer. It doe
 
 - Panel: write-only ST7789, 240×240 visible, RGB565, SPI mode 3 at 80 MHz. GPIO21 CS, GPIO38 CLK, GPIO39 MOSI, GPIO45 DC, GPIO40 RST, GPIO46 backlight. GPIO45 and GPIO46 are strapping pins. They are configured only after boot. No MISO. No TE. Tearing is a hardware fact. Dirty rectangles are the later mitigation.
 - Backlight is LEDC low-speed channel 0 on GPIO46: 5 kHz, 10-bit. Duty starts at 0. The drawer fades it on after the panel is up. A full swing is requested at 420 ms. At 5 kHz the fade hardware holds each duty step for 2 cycles, so the glass takes about 410 ms. A reverse mid-fade keeps that duty per millisecond. PWR (GPIO5) is active low with an internal pull-up. The scan ignores it until the pin has been seen released, then toggles after two pressed samples 20 ms apart.
-- One full RGB565 frame is 115200 bytes and about 12.3 ms on the wire. The drawer presents 1:1 through two 16-row DMA bands (15360 bytes): the idle band is filled while the other is on the wire. A second full frame is not reserved.
+- One full RGB565 frame is 115200 bytes and about 12.3 ms on the wire. The drawer presents 1:1 through two 120-row DMA bands, which together are that frame. The idle band fills while the other is on the wire. `app_main` reserves the pair and the 57600-byte 8bpp buffer before the NimBLE central, while the 265 KiB internal hole is still one block. After the central the largest hole is smaller than that buffer. A second copy is not reserved. A band is 57600 bytes, so each color transfer is split at the 32768-byte DMA cap under one RAMWR.
 - Internal SRAM is 512 KB. DMA and the BLE controller live here. PSRAM cannot hold them.
 - PSRAM is 8 MB octal. The game arena is one 64 KB block here. The rest stays free so a stray heap allocation is visible.
 - Flash is 16 MB quad, not OPI. `sdkconfig.defaults` sets that.
@@ -63,9 +63,9 @@ The PC build defines `PLATFORM_NATIVE` and uses the engine's SDL2 drawer. It doe
 
 ## Display
 
-Logical resolution equals the panel: 240×240, no upscale. That fits more of a level on the square glass. The wire cost of a full present stays about 12.3 ms, because the panel always receives 240×240 RGB565.
+Logical resolution equals the panel: 240×240, no upscale. That fits more of a level on the square glass. The wire cost of a full present stays about 12.3 ms, because the panel always receives 240×240 RGB565. Present ships that frame as two 120-row windows. The S3 DMA length cap is 32768 bytes, so each window's pixels are two transactions under one address setup.
 
-The logical buffer is 240×240 8bpp, 57600 bytes, in internal RAM. The engine draws through `DrawSurface` and does not allocate this buffer itself. The ST7789 drawer does, because `DisplayType::CUSTOM` has no TFT sprite. Hot pixels stay out of PSRAM. The static tilemap framebuffer cache stays off. It would duplicate those 57600 bytes.
+The logical buffer is 240×240 8bpp, 57600 bytes, in internal RAM. The engine draws through `DrawSurface` and does not allocate this buffer itself. `st7789_alloc_bands` does, in the same call as the DMA bands, because `DisplayType::CUSTOM` has no TFT sprite. Hot pixels stay out of PSRAM. The static tilemap framebuffer cache stays off. It would duplicate those 57600 bytes.
 
 Each present the engine calls `clearBuffer` before the scene draws. That call does not wipe the 57600 indices, and it does not rebuild the palette. The palette is the fixed 256-entry table in `palette_rgb565`, so an index keeps its color. The scene's first draw is a full-view rectangle, so a second write of those bytes would sit on the CPU while the SPI bus is idle. A pixel left untouched keeps its previous index and the same color. `init` still wipes the indices once, before the panel is shown.
 
@@ -183,13 +183,13 @@ The device block comes from `heap_caps_malloc` with `MALLOC_CAP_SPIRAM`, after B
 | --- | --- | ---: | --- | --- |
 | BLE controller and host | internal | unmeasured | ESP-IDF | NimBLE, internal pools. Fill from the first boot log |
 | FreeRTOS stacks, including the BT host task | internal | unmeasured | ESP-IDF | |
-| Present band | internal, DMA | 15360 | ST7789 drawer | Two 16-row bands of 240 RGB565. The idle band fills during the other's DMA |
+| Present band | internal, DMA | 115200 | ST7789 drawer | Two 120-row bands of 240 RGB565, one frame. Reserved in `app_main` before the central. The idle band fills during the other's DMA |
 | Backlight task stack | internal | 3072 | ST7789 drawer | Polls PWR. The fade itself is LEDC hardware |
 | Pad reset task stack | internal | 2048 | `pad_link` | Polls BOOT and PLUS. A double BOOT runs on the NimBLE event queue. A single BOOT is a mailbox the host reads |
 | Sim task stack | internal | 3072 | host | Core 0, priority 2. The 16 ms clock lives here |
 | Present task stack | internal | 4096 | host | Core 1, priority 2. Owns the Engine and the drawer |
 | Draw snapshot | internal | 8392 | host | Two copies of the draw view, 256 AABB slots. Seqlock. Not the arena |
-| Logical buffer | internal | 57600 | ST7789 drawer | 240×240 8bpp. Not a second RGB565 frame |
+| Logical buffer | internal | 57600 | ST7789 drawer | 240×240 8bpp. Reserved in `app_main` with the bands, before the central. Not a second RGB565 frame |
 | Body sheet | flash | 9984 | `body_sheet` | 39 frames, 8bpp indices, 16×16. Index 0 is skip |
 | Palette | flash | 512 | `palette` | 256 RGB565 entries. The ST7789 drawer reads this table |
 | Game arena | PSRAM | 65536 | `arena` | Never freed |
@@ -202,7 +202,7 @@ Boot log, after the engine buffer exists: free internal heap, largest free inter
 
 ## Runtime
 
-`app_main` drives `BAT_EN` high, opens the VBAT ADC, starts NVS and the NimBLE central, creates the arena, then `engine_host_run`. On the device that call publishes the spawn view and returns. The sim task is pinned to core 0. The present task is pinned to core 1, constructs the Engine, and calls `Engine::run`. That device call paints one frame and does not call `update`. On the PC, `Engine::run` still loops update then present until the window closes, on one thread. The PC `main` creates the arena and calls the same host. Neither target inits I2C, Wi-Fi, the codec, or the IMU.
+`app_main` drives `BAT_EN` high, opens the VBAT ADC, reserves the present bands and the 8bpp buffer, starts NVS and the NimBLE central, creates the arena, then `engine_host_run`. On the device that call publishes the spawn view and returns. The sim task is pinned to core 0. The present task is pinned to core 1, constructs the Engine, and calls `Engine::run`. That device call paints one frame and does not call `update`. On the PC, `Engine::run` still loops update then present until the window closes, on one thread. The PC `main` creates the arena and calls the same host. Neither target inits I2C, Wi-Fi, the codec, or the IMU.
 
 The sim publishes a draw snapshot in internal RAM after each advance. Present copies one stable view and draws only that. A torn slot is retried. The sim does not take a lock, and present does not call `world_*`, `pad_link_read`, or `battery_percent`. The link ground and the battery percent ride in the snapshot. The present rate stays on the present task.
 
@@ -223,6 +223,7 @@ The drawer fades the backlight on after the panel is up. PWR fades it off or bac
 | 2026-10-15 | Pad link matches pademu reconnect: 2 s supervision, no bonding, and a 2 s watch that restarts a dead scan or an attempt stuck for 8 s |
 | 2026-10-15 | Device host repeats `Engine::run`. That call is one frame on the device; the PC call already loops |
 | 2026-10-16 | Sim is pinned to core 0 and present to core 1. Device `Engine::run` does not call `update`. Present draws the latest snapshot. Duty 0 stops present; 30 s later the sim light-sleeps until PWR. The PSRAM arena stays |
+| 2026-10-16 | Present uses two 120-row DMA bands, one RGB565 frame, reserved before the NimBLE central. The 8bpp buffer is reserved in that same call. A second copy is not reserved |
 | 2026-10-16 | On the PC, key 1 is PWR, key 2 is PLUS, and key 3 is BOOT. Key 1 blacks the window and pauses the sim after 30 s |
 | 2026-10-16 | Light sleep holds the ST7789 pads. Wake repeats the panel init so the glass is not left black |
 | 2026-10-15 | Fixed timestep length and feel constants stay open until something actually jumps |

@@ -26,7 +26,7 @@ static void nvs_start(void)
     ESP_ERROR_CHECK(err);
 }
 
-/* [app_main] Liga o BAT_EN e então [battery_start], [nvs_start], [pad_link_start], [arena_init] e [engine_host_run]. */
+/* [app_main] Liga o BAT_EN e então [battery_start], [st7789_alloc_bands], [nvs_start], [pad_link_start], [arena_init] e [engine_host_run]. */
 void app_main(void)
 {
     void *block;
@@ -34,6 +34,7 @@ void app_main(void)
     gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT);
     gpio_set_level(GPIO_NUM_2, 1);
     battery_start();
+    st7789_alloc_bands();
 
     nvs_start();
     pad_link_start();
