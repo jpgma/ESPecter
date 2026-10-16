@@ -5,23 +5,29 @@
 
 #define WORLD_CAP 8
 #define WORLD_SUB 8
-#define WORLD_RUN_ACCEL 64
-#define WORLD_RUN_MAX 700
+/* Converte px/s em subpixels de um tick. num/den é a taxa. */
+#define PIXPS_TO_SUBPIXPT(num, den) ((num) * (1 << WORLD_SUB) * WORLD_TICK_MS / (1000 * (den)))
+/* Converte px/s² em subpixels de um tick. */
+#define PER_TICK2(px) ((px) * (1 << WORLD_SUB) * WORLD_TICK_MS * WORLD_TICK_MS / 1000000)
+/* Converte ms em ticks de WORLD_TICK_MS. */
+#define MS_TICKS(ms) ((ms) / WORLD_TICK_MS)
+#define WORLD_RUN_ACCEL PER_TICK2(977)
+#define WORLD_RUN_MAX PIXPS_TO_SUBPIXPT(171, 1)
 #define WORLD_JOG_MIN (WORLD_RUN_MAX / 2)
-#define BODY_TICK_MS 16
-#define WORLD_GRAVITY_RISE 128
-#define WORLD_GRAVITY_FALL 256
-#define WORLD_JUMP_VY (-2048)
-#define WORLD_FALL_MAX 2048
-#define WORLD_SLIDE_MAX 256
-#define WORLD_WALL_JUMP 1500
+#define WORLD_GRAVITY_RISE PER_TICK2(1954)
+#define WORLD_GRAVITY_FALL PER_TICK2(3907)
+#define WORLD_JUMP_VY (-PIXPS_TO_SUBPIXPT(500, 1))
+#define WORLD_FALL_MAX PIXPS_TO_SUBPIXPT(500, 1)
+#define WORLD_SLIDE_MAX PIXPS_TO_SUBPIXPT(125, 2)
+#define WORLD_WALL_JUMP PIXPS_TO_SUBPIXPT(46875, 128)
 #define WORLD_COLS 20
 #define BODY_ACT_NONE 0
 #define BODY_ACT_FLOOR 1
 #define BODY_ACT_WALL 2
-#define WORLD_CAM_STIFF 2
-#define WORLD_CAM_DAMP_NUM 3
-#define WORLD_CAM_DAMP_DEN 8
+#define WORLD_CAM_KICK_NUM 3
+#define WORLD_CAM_KICK_DEN 8
+#define WORLD_CAM_DAMP_NUM 15
+#define WORLD_CAM_DAMP_DEN 32
 #define WORLD_CAM_FLOOR 32
 #define WORLD_SPAN (WORLD_VIEW << WORLD_SUB)
 #define SOLID_CAP WORLD_SOLID_CAP
@@ -37,7 +43,7 @@
 #define LIFE_PLAY 0
 #define LIFE_DYING 1
 #define LIFE_DONE 2
-#define DEATH_HOLD 16
+#define DEATH_HOLD MS_TICKS(252)
 #define SPAWN_CELL_X 0
 #define SPAWN_CELL_Y 0
 #define SPAWN_X (((WORLD_VIEW - WORLD_BODY_W) / 2) << WORLD_SUB)
@@ -653,7 +659,7 @@ static int body_advance_due(void)
     return 1;
 }
 
-/* [body_commit] Soma 16 ms no hold do clip que ficou para o desenho. */
+/* [body_commit] Soma 12 ms no hold do clip que ficou para o desenho. */
 static void body_commit(void)
 {
     int need;
@@ -662,7 +668,7 @@ static void body_commit(void)
     if (need <= 0) {
         return;
     }
-    row_hold[0] += BODY_TICK_MS;
+    row_hold[0] += WORLD_TICK_MS;
 }
 
 /* [body_select_ground] Escolhe idle, walk, jog, run ou a virada no chão. */
@@ -779,7 +785,7 @@ static int cam_focus_y(void)
 /* [cam_axis] Integra um eixo da mola até o alvo. */
 static void cam_axis(int *pos, int *vel, int target)
 {
-    *vel += (target - *pos) / WORLD_CAM_STIFF;
+    *vel += (target - *pos) * WORLD_CAM_KICK_NUM / WORLD_CAM_KICK_DEN;
     *vel = *vel * WORLD_CAM_DAMP_NUM / WORLD_CAM_DAMP_DEN;
     *pos += *vel;
 }
@@ -1006,7 +1012,7 @@ static int body_fallen(void)
     return cam_feet() > (PIT_Y << WORLD_SUB);
 }
 
-/* [world_tick] Integra um tick fixo. O pit e o spike abrem 16 ticks de morte e depois [body_place_at] no checkpoint. A saída congela até [world_reset]. A mola e [body_pose] só correm vivo. */
+/* [world_tick] Integra um tick fixo. O pit e o spike abrem 252 ms de morte e depois [body_place_at] no checkpoint. A saída congela até [world_reset]. A mola e [body_pose] só correm vivo. */
 void world_tick(const actions *input)
 {
     if (row_count < 1 || input == 0) {

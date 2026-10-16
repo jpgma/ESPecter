@@ -37,6 +37,9 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "soc/usb_serial_jtag_struct.h"
+
+#include "frame_profile.h"
 
 #include <cstdint>
 #endif
@@ -433,7 +436,7 @@ void load_view(void)
     }
 }
 
-/* [sim_advance] Lê [host_edges], gasta o delta em ticks de 16 ms de [world_tick], no máximo 4, e chama [publish_view]. No PC, [pc_sim_held] segura os ticks. */
+/* [sim_advance] Lê [host_edges], gasta o delta em ticks de 12 ms de [world_tick], no máximo 4, e chama [publish_view]. No PC, [pc_sim_held] segura os ticks. */
 void sim_advance(unsigned long delta_time)
 {
     int steps;
@@ -445,15 +448,15 @@ void sim_advance(unsigned long delta_time)
     }
     g_sim_ms += delta_time;
     steps = 0;
-    while (g_sim_ms >= 16 && steps < 4) {
+    while (g_sim_ms >= WORLD_TICK_MS && steps < 4) {
         actions input;
 
         actions_capture(&input);
         world_tick(&input);
-        g_sim_ms -= 16;
+        g_sim_ms -= WORLD_TICK_MS;
         steps += 1;
     }
-    if (steps == 4 && g_sim_ms >= 16) {
+    if (steps == 4 && g_sim_ms >= WORLD_TICK_MS) {
         g_sim_ms = 0;
     }
     publish_view();
@@ -475,6 +478,156 @@ void note_frame(unsigned long delta_time)
     g_fps_frames = 0;
 }
 
+#ifndef PLATFORM_NATIVE
+constexpr int k_text_rows = 8;
+
+int g_have_last;
+int g_last_cam_x;
+int g_last_cam_y;
+int g_last_body_x;
+int g_last_body_y;
+int g_last_body_w;
+int g_last_body_h;
+int g_last_clip;
+int g_last_frame;
+int g_last_face;
+int g_last_debug;
+int g_last_fps;
+int g_last_battery;
+uint16_t g_last_ground;
+view_rect g_last_spike;
+view_rect g_last_checkpoint;
+view_rect g_last_exit;
+
+/* [rect_same] Devolve 1 se os dois Rect coincidem. */
+int rect_same(const view_rect *a, const view_rect *b)
+{
+    return a->x == b->x && a->y == b->y && a->w == b->w && a->h == b->h;
+}
+
+/* [mark_rect_rows] Marca o Y de tela do Rect no cam_y. */
+void mark_rect_rows(int cam_y, int y, int h)
+{
+    if (h <= 0) {
+        return;
+    }
+    especter::st7789_rows_mark(y - cam_y, y - cam_y + h);
+}
+
+/* [mark_body_rows] Marca o Y de tela da sheet de 16×16, como [draw_body]. */
+void mark_body_rows(int cam_y, int body_y, int body_h)
+{
+    int top;
+
+    top = body_y - (BODY_SHEET_H - body_h);
+    especter::st7789_rows_mark(top - cam_y, top - cam_y + BODY_SHEET_H);
+}
+
+/* [body_changed] Devolve 1 se a pose ou o Rect do corpo mudou desde o último present. */
+int body_changed(void)
+{
+    return g_shown->body_x != g_last_body_x || g_shown->body_y != g_last_body_y || g_shown->body_w != g_last_body_w
+        || g_shown->body_h != g_last_body_h || g_shown->clip != g_last_clip || g_shown->frame != g_last_frame
+        || g_shown->face != g_last_face;
+}
+
+/* [mark_movers] Marca sólidos, spike, checkpoint, saída e corpo no cam_y. */
+void mark_movers(int cam_y)
+{
+    int i;
+
+    for (i = 0; i < g_shown->solid_count; i++) {
+        mark_rect_rows(cam_y, g_shown->solids[i].y, g_shown->solids[i].h);
+    }
+    mark_rect_rows(cam_y, g_shown->spike.y, g_shown->spike.h);
+    mark_rect_rows(cam_y, g_shown->checkpoint.y, g_shown->checkpoint.h);
+    mark_rect_rows(cam_y, g_shown->exit_box.y, g_shown->exit_box.h);
+    mark_body_rows(cam_y, g_shown->body_y, g_shown->body_h);
+}
+
+/* [mark_present_rows] Monta a máscara a partir da view e da anterior. Devolve quantas rows ficaram sujas. */
+int mark_present_rows(void)
+{
+    int cam_moved;
+    int debug_toggled;
+
+    especter::st7789_rows_clear();
+    if (!g_have_last || especter::st7789_take_gram() || g_shown->ground != g_last_ground) {
+        especter::st7789_rows_mark_all();
+        return especter::st7789_rows_count();
+    }
+    cam_moved = g_shown->cam_x != g_last_cam_x || g_shown->cam_y != g_last_cam_y;
+    debug_toggled = g_shown->debug != g_last_debug;
+    if (debug_toggled || (g_shown->debug && cam_moved)) {
+        especter::st7789_rows_mark_all();
+        return especter::st7789_rows_count();
+    }
+    if (cam_moved) {
+        mark_movers(g_last_cam_y);
+        mark_movers(g_shown->cam_y);
+        if (body_changed()) {
+            mark_body_rows(g_last_cam_y, g_last_body_y, g_last_body_h);
+            mark_body_rows(g_shown->cam_y, g_shown->body_y, g_shown->body_h);
+        }
+        if (!rect_same(&g_shown->spike, &g_last_spike)) {
+            mark_rect_rows(g_last_cam_y, g_last_spike.y, g_last_spike.h);
+            mark_rect_rows(g_shown->cam_y, g_shown->spike.y, g_shown->spike.h);
+        }
+        if (!rect_same(&g_shown->checkpoint, &g_last_checkpoint)) {
+            mark_rect_rows(g_last_cam_y, g_last_checkpoint.y, g_last_checkpoint.h);
+            mark_rect_rows(g_shown->cam_y, g_shown->checkpoint.y, g_shown->checkpoint.h);
+        }
+        if (!rect_same(&g_shown->exit_box, &g_last_exit)) {
+            mark_rect_rows(g_last_cam_y, g_last_exit.y, g_last_exit.h);
+            mark_rect_rows(g_shown->cam_y, g_shown->exit_box.y, g_shown->exit_box.h);
+        }
+    } else {
+        if (body_changed()) {
+            mark_body_rows(g_shown->cam_y, g_last_body_y, g_last_body_h);
+            mark_body_rows(g_shown->cam_y, g_shown->body_y, g_shown->body_h);
+        }
+        if (!rect_same(&g_shown->spike, &g_last_spike)) {
+            mark_rect_rows(g_shown->cam_y, g_last_spike.y, g_last_spike.h);
+            mark_rect_rows(g_shown->cam_y, g_shown->spike.y, g_shown->spike.h);
+        }
+        if (!rect_same(&g_shown->checkpoint, &g_last_checkpoint)) {
+            mark_rect_rows(g_shown->cam_y, g_last_checkpoint.y, g_last_checkpoint.h);
+            mark_rect_rows(g_shown->cam_y, g_shown->checkpoint.y, g_shown->checkpoint.h);
+        }
+        if (!rect_same(&g_shown->exit_box, &g_last_exit)) {
+            mark_rect_rows(g_shown->cam_y, g_last_exit.y, g_last_exit.h);
+            mark_rect_rows(g_shown->cam_y, g_shown->exit_box.y, g_shown->exit_box.h);
+        }
+    }
+    if (g_shown->debug && (g_fps != g_last_fps || g_shown->battery_pct != g_last_battery)) {
+        especter::st7789_rows_mark(0, k_text_rows);
+    }
+    return especter::st7789_rows_count();
+}
+
+/* [remember_present] Guarda a view que este present pintou. */
+void remember_present(void)
+{
+    g_last_cam_x = g_shown->cam_x;
+    g_last_cam_y = g_shown->cam_y;
+    g_last_body_x = g_shown->body_x;
+    g_last_body_y = g_shown->body_y;
+    g_last_body_w = g_shown->body_w;
+    g_last_body_h = g_shown->body_h;
+    g_last_clip = g_shown->clip;
+    g_last_frame = g_shown->frame;
+    g_last_face = g_shown->face;
+    g_last_debug = g_shown->debug;
+    g_last_fps = g_fps;
+    g_last_battery = g_shown->battery_pct;
+    g_last_ground = g_shown->ground;
+    g_last_spike = g_shown->spike;
+    g_last_checkpoint = g_shown->checkpoint;
+    g_last_exit = g_shown->exit_box;
+    g_have_last = 1;
+}
+#endif
+
 class rect_scene : public pixelroot32::core::Scene {
 public:
     /* [rect_scene::update] No PC avança com [sim_advance] e mede o present em [note_frame]. No device o sim não passa por aqui. */
@@ -490,7 +643,7 @@ public:
 #endif
     }
 
-    /* [rect_scene::draw] Pinta a view de [load_view]: ground, sólidos, spike, checkpoint, saída e corpo no offset da câmera. Com o debug, o wireframe das células, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No PC, com o PWR apagado, pinta preto e volta. */
+    /* [rect_scene::draw] Pinta a view de [load_view]: ground, sólidos, spike, checkpoint, saída e corpo no offset da câmera. No device só as rows de [mark_present_rows]. Com o debug, o wireframe das células, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No PC, com o PWR apagado, pinta preto e volta. */
     void draw(pixelroot32::graphics::Renderer &renderer) override
     {
         int cam_x;
@@ -501,13 +654,39 @@ public:
         int my;
         int mw;
         int mh;
+#ifndef PLATFORM_NATIVE
+        int timing;
+        int64_t stamp;
+#endif
 
+#ifndef PLATFORM_NATIVE
+        timing = frame_profile_on();
+        stamp = 0;
+        if (timing) {
+            stamp = esp_timer_get_time();
+        }
+#endif
         load_view();
 #ifdef PLATFORM_NATIVE
         if (!g_pc_lit) {
             renderer.setOffsetBypass(true);
             renderer.drawFilledRectangle(0, 0, WORLD_VIEW, WORLD_VIEW, pixelroot32::graphics::Color::Black);
             return;
+        }
+#else
+        if (mark_present_rows() == 0) {
+            if (timing) {
+                frame_profile_add(FRAME_MASK, esp_timer_get_time() - stamp);
+                frame_profile_add(FRAME_GROUND, 0);
+                frame_profile_add(FRAME_SOLIDS, 0);
+                frame_profile_add(FRAME_BODY, 0);
+                frame_profile_add(FRAME_DEBUG, 0);
+            }
+            return;
+        }
+        if (timing) {
+            frame_profile_add(FRAME_MASK, esp_timer_get_time() - stamp);
+            stamp = esp_timer_get_time();
         }
 #endif
         cam_x = g_shown->cam_x;
@@ -517,6 +696,10 @@ public:
         renderer.drawFilledRectangle(0, 0, WORLD_VIEW, WORLD_VIEW, pixelroot32::graphics::Color::DarkGreen);
 #else
         renderer.drawFilledRectangleW(0, 0, WORLD_VIEW, WORLD_VIEW, g_shown->ground);
+        if (timing) {
+            frame_profile_add(FRAME_GROUND, esp_timer_get_time() - stamp);
+            stamp = esp_timer_get_time();
+        }
 #endif
         renderer.setOffsetBypass(false);
         renderer.setDisplayOffset(-cam_x, -cam_y);
@@ -550,7 +733,19 @@ public:
         mw = g_shown->exit_box.w;
         mh = g_shown->exit_box.h;
         draw_world_outline(renderer, cam_x, cam_y, mx, my, mw, mh);
+#ifndef PLATFORM_NATIVE
+        if (timing) {
+            frame_profile_add(FRAME_SOLIDS, esp_timer_get_time() - stamp);
+            stamp = esp_timer_get_time();
+        }
+#endif
         draw_body(renderer, cam_x, cam_y);
+#ifndef PLATFORM_NATIVE
+        if (timing) {
+            frame_profile_add(FRAME_BODY, esp_timer_get_time() - stamp);
+            stamp = esp_timer_get_time();
+        }
+#endif
         if (g_shown->debug) {
             int x0;
             int y0;
@@ -571,34 +766,39 @@ public:
             }
         }
         renderer.setOffsetBypass(true);
-        if (!g_shown->debug) {
-            return;
+        if (g_shown->debug) {
+#ifndef PLATFORM_NATIVE
+            {
+                const int pct = g_shown->battery_pct;
+
+                if (pct >= 0) {
+                    char label[16];
+
+                    std::snprintf(label, sizeof label, "%d%%", pct);
+                    renderer.drawText(label, 1, 0, pixelroot32::graphics::Color::White, 1);
+                }
+            }
+#endif
+            if (g_fps >= 0) {
+                char label[16];
+                int text_w;
+                int text_x;
+
+                std::snprintf(label, sizeof label, "%d FPS", g_fps);
+                text_w = pixelroot32::graphics::FontManager::textWidth(nullptr, label, 1);
+                text_x = WORLD_VIEW - text_w - 1;
+                if (text_x < 0) {
+                    text_x = 0;
+                }
+                renderer.drawText(label, text_x, 0, pixelroot32::graphics::Color::White, 1);
+            }
         }
 #ifndef PLATFORM_NATIVE
-        {
-            const int pct = g_shown->battery_pct;
-
-            if (pct >= 0) {
-                char label[16];
-
-                std::snprintf(label, sizeof label, "%d%%", pct);
-                renderer.drawText(label, 1, 0, pixelroot32::graphics::Color::White, 1);
-            }
+        if (timing) {
+            frame_profile_add(FRAME_DEBUG, esp_timer_get_time() - stamp);
         }
+        remember_present();
 #endif
-        if (g_fps >= 0) {
-            char label[16];
-            int text_w;
-            int text_x;
-
-            std::snprintf(label, sizeof label, "%d FPS", g_fps);
-            text_w = pixelroot32::graphics::FontManager::textWidth(nullptr, label, 1);
-            text_x = WORLD_VIEW - text_w - 1;
-            if (text_x < 0) {
-                text_x = 0;
-            }
-            renderer.drawText(label, text_x, 0, pixelroot32::graphics::Color::White, 1);
-        }
     }
 };
 
@@ -757,8 +957,21 @@ void sim_task(void *arg)
         unsigned long now;
         unsigned long delta;
         int lit;
+        int timing;
+        int64_t loop_t0;
+        int64_t wait_us;
+        int64_t sim_t0;
 
+        timing = frame_profile_on();
+        loop_t0 = 0;
+        wait_us = 0;
+        if (timing) {
+            loop_t0 = esp_timer_get_time();
+        }
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1));
+        if (timing) {
+            wait_us = esp_timer_get_time() - loop_t0;
+        }
         lit = especter::st7789_lit();
         if (lit) {
             if (!g_was_lit) {
@@ -779,13 +992,28 @@ void sim_task(void *arg)
         now = millis();
         delta = now - prev;
         prev = now;
+        sim_t0 = 0;
+        if (timing) {
+            sim_t0 = esp_timer_get_time();
+        }
         if (delta > 0) {
             sim_advance(delta);
+        }
+        if (timing) {
+            int64_t sim_us;
+            int64_t other_us;
+
+            sim_us = esp_timer_get_time() - sim_t0;
+            other_us = (esp_timer_get_time() - loop_t0) - wait_us - sim_us;
+            if (other_us < 0) {
+                other_us = 0;
+            }
+            frame_profile_core0(wait_us, sim_us, other_us);
         }
     }
 }
 
-/* [present_task] No core 1, constrói o drawer na slice de [arena_drawer] e o Engine na slice de [arena_engine], e chama Engine::run enquanto [st7789_lit] estiver aceso. */
+/* [present_task] No core 1, constrói o drawer na slice de [arena_drawer] e o Engine na slice de [arena_engine], e chama Engine::run enquanto [st7789_lit] estiver aceso. Máscara vazia espera 1 ms. */
 void present_task(void *arg)
 {
     unsigned long prev;
@@ -829,18 +1057,295 @@ void present_task(void *arg)
             prev = millis();
             continue;
         }
-        now = millis();
-        delta = now - prev;
-        prev = now;
-        if (delta > 0) {
-            note_frame(delta);
+        {
+            int timing;
+            int64_t loop_t0;
+            int64_t wait_us;
+            int rows;
+
+            timing = frame_profile_on();
+            loop_t0 = 0;
+            wait_us = 0;
+            if (timing) {
+                frame_profile_begin();
+                loop_t0 = esp_timer_get_time();
+            }
+            now = millis();
+            delta = now - prev;
+            prev = now;
+            if (delta > 0) {
+                note_frame(delta);
+            }
+            engine->run();
+            rows = especter::st7789_rows_count();
+            if (rows == 0) {
+                int64_t wait_t0;
+
+                wait_t0 = 0;
+                if (timing) {
+                    wait_t0 = esp_timer_get_time();
+                }
+                vTaskDelay(pdMS_TO_TICKS(1));
+                if (timing) {
+                    wait_us = esp_timer_get_time() - wait_t0;
+                }
+            }
+            if (timing) {
+                frame_profile_frame(esp_timer_get_time() - loop_t0, wait_us, rows == 0, rows);
+            }
+            frame_profile_flush();
         }
-        engine->run();
     }
 }
 #endif
 
 } // namespace
+
+#ifndef PLATFORM_NATIVE
+namespace {
+
+enum {
+    CORE0_WAIT = 0,
+    CORE0_SIM = 1,
+    CORE0_OTHER = 2,
+    CORE0_PART_COUNT = 3
+};
+
+std::atomic<int> g_profile_on{0};
+int g_profile_primed;
+int64_t g_gate_at;
+int64_t g_print_at;
+uint32_t g_sof;
+int g_profile_n;
+int g_profile_empty;
+int g_profile_busy;
+int g_profile_rows_max;
+int64_t g_profile_rows;
+int64_t g_part_sum[FRAME_PART_COUNT];
+int64_t g_part_max[FRAME_PART_COUNT];
+int64_t g_part_last[FRAME_PART_COUNT];
+std::atomic<int64_t> g_c0_sum[CORE0_PART_COUNT];
+std::atomic<int64_t> g_c0_max[CORE0_PART_COUNT];
+std::atomic<int> g_c0_n{0};
+
+const char *k_part_name[FRAME_PART_COUNT] = {
+    "mask", "ground", "solids", "body", "debug", "expand", "spi", "engine", "wait"};
+const char *k_c0_name[CORE0_PART_COUNT] = {"wait", "sim", "other"};
+
+/* [profile_reset_present] Zera os acumuladores do core 1. */
+void profile_reset_present(void)
+{
+    int i;
+
+    g_profile_n = 0;
+    g_profile_empty = 0;
+    g_profile_busy = 0;
+    g_profile_rows_max = 0;
+    g_profile_rows = 0;
+    for (i = 0; i < FRAME_PART_COUNT; i++) {
+        g_part_sum[i] = 0;
+        g_part_max[i] = 0;
+        g_part_last[i] = 0;
+    }
+}
+
+/* [profile_reset_core0] Zera os acumuladores do core 0. */
+void profile_reset_core0(void)
+{
+    int i;
+
+    g_c0_n.store(0, std::memory_order_relaxed);
+    for (i = 0; i < CORE0_PART_COUNT; i++) {
+        g_c0_sum[i].store(0, std::memory_order_relaxed);
+        g_c0_max[i].store(0, std::memory_order_relaxed);
+    }
+}
+
+/* [profile_c0_max] Sobe o máximo do pedaço do core 0 se us for maior. */
+void profile_c0_max(int part, int64_t us)
+{
+    int64_t prev;
+
+    prev = g_c0_max[part].load(std::memory_order_relaxed);
+    while (us > prev && !g_c0_max[part].compare_exchange_weak(prev, us, std::memory_order_relaxed)) {
+    }
+}
+
+/* [profile_pct] Devolve o percentual inteiro de part sobre frame. */
+int profile_pct(int64_t part, int64_t frame)
+{
+    if (frame <= 0) {
+        return 0;
+    }
+    return (int)((part * 100) / frame);
+}
+
+/* [profile_print] Imprime o segundo. Cada percentual é a fatia daquele core. O tempo deste print sai na linha log. */
+void profile_print(void)
+{
+    int64_t t0;
+    int n;
+    int rows;
+    int i;
+    int64_t core1;
+    int c0_n;
+    int64_t c0_sum[CORE0_PART_COUNT];
+    int64_t c0_max[CORE0_PART_COUNT];
+    int64_t core0;
+
+    if (g_profile_n <= 0) {
+        return;
+    }
+    t0 = esp_timer_get_time();
+    n = g_profile_n;
+    rows = g_profile_busy > 0 ? (int)(g_profile_rows / g_profile_busy) : 0;
+    core1 = 0;
+    for (i = 0; i < FRAME_PART_COUNT; i++) {
+        core1 += g_part_sum[i];
+    }
+    ESP_LOGI("frame", "core1 %lld us n %d empty %d busy %d rows %d max %d", (long long)core1, n, g_profile_empty,
+             g_profile_busy, rows, g_profile_rows_max);
+    for (i = 0; i < FRAME_PART_COUNT; i++) {
+        ESP_LOGI("frame", "core1 %s %lld us max %lld %d%%", k_part_name[i], (long long)(g_part_sum[i] / n),
+                 (long long)g_part_max[i], profile_pct(g_part_sum[i], core1));
+    }
+    core0 = 0;
+    c0_n = g_c0_n.exchange(0, std::memory_order_relaxed);
+    for (i = 0; i < CORE0_PART_COUNT; i++) {
+        c0_sum[i] = g_c0_sum[i].exchange(0, std::memory_order_relaxed);
+        c0_max[i] = g_c0_max[i].exchange(0, std::memory_order_relaxed);
+        core0 += c0_sum[i];
+    }
+    ESP_LOGI("frame", "core0 %lld us n %d", (long long)core0, c0_n);
+    for (i = 0; i < CORE0_PART_COUNT; i++) {
+        int64_t mean;
+
+        mean = c0_n > 0 ? c0_sum[i] / c0_n : 0;
+        ESP_LOGI("frame", "core0 %s %lld us max %lld %d%%", k_c0_name[i], (long long)mean, (long long)c0_max[i],
+                 profile_pct(c0_sum[i], core0));
+    }
+    ESP_LOGI("frame", "core1 log %lld us", (long long)(esp_timer_get_time() - t0));
+}
+
+} // namespace
+
+/* [frame_profile_on] Devolve 1 no segundo em que o log do frame está armado. */
+int frame_profile_on(void)
+{
+    return g_profile_on.load(std::memory_order_relaxed);
+}
+
+/* [frame_profile_begin] Zera os pedaços deste frame no core 1. */
+void frame_profile_begin(void)
+{
+    int i;
+
+    for (i = 0; i < FRAME_PART_COUNT; i++) {
+        g_part_last[i] = 0;
+    }
+}
+
+/* [frame_profile_add] Soma us no pedaço do core 1. Com [frame_profile_on] desligado, não lê o relógio. */
+void frame_profile_add(int part, int64_t us)
+{
+    if (!frame_profile_on() || part < 0 || part >= FRAME_PART_COUNT) {
+        return;
+    }
+    g_part_sum[part] += us;
+    g_part_last[part] = us;
+    if (us > g_part_max[part]) {
+        g_part_max[part] = us;
+    }
+}
+
+/* [frame_profile_frame] Fecha o laço do core 1: o resto vira engine, a espera entra em wait. */
+void frame_profile_frame(int64_t loop_us, int64_t wait_us, int empty, int rows)
+{
+    int i;
+    int64_t engine;
+
+    if (!frame_profile_on()) {
+        return;
+    }
+    engine = loop_us - wait_us;
+    for (i = 0; i < FRAME_PART_COUNT; i++) {
+        if (i == FRAME_ENGINE || i == FRAME_WAIT) {
+            continue;
+        }
+        engine -= g_part_last[i];
+    }
+    if (engine < 0) {
+        engine = 0;
+    }
+    frame_profile_add(FRAME_ENGINE, engine);
+    frame_profile_add(FRAME_WAIT, wait_us);
+    g_profile_n += 1;
+    if (empty) {
+        g_profile_empty += 1;
+    } else {
+        g_profile_busy += 1;
+        g_profile_rows += rows;
+        if (rows > g_profile_rows_max) {
+            g_profile_rows_max = rows;
+        }
+    }
+}
+
+/* [frame_profile_core0] Soma um laço do core 0: espera, [sim_advance] e o resto. */
+void frame_profile_core0(int64_t wait_us, int64_t sim_us, int64_t other_us)
+{
+    if (!frame_profile_on()) {
+        return;
+    }
+    g_c0_sum[CORE0_WAIT].fetch_add(wait_us, std::memory_order_relaxed);
+    g_c0_sum[CORE0_SIM].fetch_add(sim_us, std::memory_order_relaxed);
+    g_c0_sum[CORE0_OTHER].fetch_add(other_us, std::memory_order_relaxed);
+    profile_c0_max(CORE0_WAIT, wait_us);
+    profile_c0_max(CORE0_SIM, sim_us);
+    profile_c0_max(CORE0_OTHER, other_us);
+    g_c0_n.fetch_add(1, std::memory_order_relaxed);
+}
+
+/* [frame_profile_flush] Se o SOF andou, imprime uma vez por segundo média, máximo e percentual de cada core. */
+void frame_profile_flush(void)
+{
+    int64_t now;
+    uint32_t sof;
+    int live;
+    int on;
+
+    now = esp_timer_get_time();
+    if (!g_profile_primed) {
+        g_sof = USB_SERIAL_JTAG.fram_num.sof_frame_index;
+        g_profile_primed = 1;
+        g_gate_at = now + 1000000;
+        g_profile_on.store(0, std::memory_order_relaxed);
+        return;
+    }
+    on = frame_profile_on();
+    if (on && now >= g_print_at) {
+        profile_print();
+        profile_reset_present();
+        g_print_at = now + 1000000;
+    }
+    if (now < g_gate_at) {
+        return;
+    }
+    sof = USB_SERIAL_JTAG.fram_num.sof_frame_index;
+    live = sof != g_sof;
+    g_sof = sof;
+    g_gate_at = now + 1000000;
+    if (live == on) {
+        return;
+    }
+    g_profile_on.store(live, std::memory_order_relaxed);
+    profile_reset_present();
+    profile_reset_core0();
+    if (live) {
+        g_print_at = now + 1000000;
+    }
+}
+#endif
 
 /* [engine_host_run] Sobe a Scene depois de [world_init]. No PC entra no laço do Engine. No device monta o snapshot, publica a view e prende o sim no core 0 e o present no core 1. */
 extern "C" void engine_host_run(void)

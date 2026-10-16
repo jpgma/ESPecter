@@ -1,6 +1,7 @@
 #include "st7789_drawer.h"
 
 #include "arena.h"
+#include "frame_profile.h"
 #include "palette.h"
 
 #include "driver/gpio.h"
@@ -10,6 +11,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 #include "freertos/semphr.h"
@@ -45,6 +47,7 @@ const char *k_tag = "st7789";
 
 static_assert(static_cast<size_t>(k_band_pixels) * 2u * sizeof(uint16_t) == ARENA_BANDS_BYTES, "band bytes");
 static_assert(static_cast<size_t>(k_width) * static_cast<size_t>(k_height) == ARENA_PIXELS_BYTES, "pixel bytes");
+static_assert(k_height % 8 == 0, "row mask");
 static_assert(sizeof(StaticTask_t) <= ARENA_TCB_BYTES, "tcb slice");
 static_assert(alignof(StaticTask_t) <= 16u, "tcb align");
 esp_lcd_panel_handle_t g_lcd;
@@ -57,7 +60,25 @@ portMUX_TYPE g_bl_mux = portMUX_INITIALIZER_UNLOCKED;
 std::atomic<int> g_lit{1};
 std::atomic<int> g_want_on{1};
 std::atomic<int> g_dark_pending{0};
+std::atomic<int> g_gram_reset{0};
 TaskHandle_t g_present;
+uint8_t g_row_mask[k_height / 8];
+int g_row_count;
+
+/* [row_kept] Devolve 1 se a row y está na máscara. */
+int row_kept(int y)
+{
+    if ((unsigned)y >= (unsigned)k_height) {
+        return 0;
+    }
+    if (g_row_count == 0) {
+        return 0;
+    }
+    if (g_row_count == k_height) {
+        return 1;
+    }
+    return (g_row_mask[y >> 3] >> (y & 7)) & 1;
+}
 
 /* [notify_present] Acorda a task de [st7789_bind_present]. */
 void notify_present(void)
@@ -300,7 +321,7 @@ void st7789_prepare_sleep(void)
     panel_pins_hold(1);
 }
 
-/* [st7789_resume] Solta os pads com [panel_pins_hold] e repete o init, o invert e o DISPON. Não pulsa o RST. */
+/* [st7789_resume] Solta os pads com [panel_pins_hold] e repete o init, o invert e o DISPON. Não pulsa o RST. Pede todas as rows no próximo present. */
 void st7789_resume(void)
 {
     panel_pins_hold(0);
@@ -310,7 +331,56 @@ void st7789_resume(void)
     ESP_ERROR_CHECK(esp_lcd_panel_init(g_lcd));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(g_lcd, true));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(g_lcd, true));
+    g_gram_reset.store(1, std::memory_order_release);
     ESP_LOGI(k_tag, "panel on");
+}
+
+/* [st7789_take_gram] Devolve 1 uma vez depois que [st7789_resume] refez o panel. */
+int st7789_take_gram(void)
+{
+    return g_gram_reset.exchange(0, std::memory_order_acq_rel);
+}
+
+/* [st7789_rows_clear] Zera a máscara de rows. */
+void st7789_rows_clear(void)
+{
+    std::memset(g_row_mask, 0, sizeof g_row_mask);
+    g_row_count = 0;
+}
+
+/* [st7789_rows_mark] Marca as rows [y0, y1). Fora da View é cortado. */
+void st7789_rows_mark(int y0, int y1)
+{
+    int y;
+
+    if (y0 < 0) {
+        y0 = 0;
+    }
+    if (y1 > k_height) {
+        y1 = k_height;
+    }
+    for (y = y0; y < y1; y++) {
+        uint8_t bit = (uint8_t)(1u << (y & 7));
+        uint8_t *cell = &g_row_mask[y >> 3];
+
+        if ((*cell & bit) == 0) {
+            *cell |= bit;
+            g_row_count++;
+        }
+    }
+}
+
+/* [st7789_rows_mark_all] Marca as 240 rows. */
+void st7789_rows_mark_all(void)
+{
+    std::memset(g_row_mask, 0xff, sizeof g_row_mask);
+    g_row_count = k_height;
+}
+
+/* [st7789_rows_count] Devolve quantas rows a máscara tem. */
+int st7789_rows_count(void)
+{
+    return g_row_count;
 }
 
 /* [st7789_pwr_ready] Reaplica o PWR como entrada com pull-up depois do light sleep. */
@@ -421,21 +491,21 @@ void st7789_drawer::init()
     ready = 1;
 }
 
-/* [st7789_drawer::clearBuffer] Não mexe na palette nem nos índices. A cena cobre a View. */
+/* [st7789_drawer::clearBuffer] Não mexe na palette nem nos índices. A cena restaura as rows sujas. */
 void st7789_drawer::clearBuffer()
 {
 }
 
-/* [st7789_drawer::drawPixel] Grava um índice da palette no pixel. */
+/* [st7789_drawer::drawPixel] Grava um índice da palette no pixel se a row está na máscara. */
 void st7789_drawer::drawPixel(int x, int y, uint16_t color)
 {
-    if (pixels == nullptr || x < 0 || y < 0 || x >= logicalWidth || y >= logicalHeight) {
+    if (pixels == nullptr || x < 0 || y < 0 || x >= logicalWidth || y >= logicalHeight || !row_kept(y)) {
         return;
     }
     pixels[static_cast<size_t>(y * logicalWidth + x)] = index_for(color);
 }
 
-/* [st7789_drawer::drawFilledRectangle] Preenche um rectangle com um índice da palette. Uma linha cheia usa memset. */
+/* [st7789_drawer::drawFilledRectangle] Preenche um rectangle com um índice da palette. Uma linha cheia usa memset. Row limpa não muda. */
 void st7789_drawer::drawFilledRectangle(int x, int y, int w, int h, uint16_t color)
 {
     int x0;
@@ -462,19 +532,26 @@ void st7789_drawer::drawFilledRectangle(int x, int y, int w, int h, uint16_t col
     index = index_for(color);
     if (x0 == 0 && x1 == logicalWidth) {
         for (row = y0; row < y1; row++) {
+            if (!row_kept(row)) {
+                continue;
+            }
             std::memset(pixels + static_cast<size_t>(row * logicalWidth), index, static_cast<size_t>(logicalWidth));
         }
         return;
     }
     for (row = y0; row < y1; row++) {
         uint8_t *dst = pixels + static_cast<size_t>(row * logicalWidth);
+
+        if (!row_kept(row)) {
+            continue;
+        }
         for (col = x0; col < x1; col++) {
             dst[col] = index;
         }
     }
 }
 
-/* [st7789_drawer::sendBuffer] Converte o band ocioso enquanto o outro segue no DMA. */
+/* [st7789_drawer::sendBuffer] Expande as rows sujas no band ocioso e manda essa janela. Máscara vazia não chama SPI. */
 void st7789_drawer::sendBuffer()
 {
     auto *lcd = static_cast<esp_lcd_panel_handle_t>(panel);
@@ -482,27 +559,56 @@ void st7789_drawer::sendBuffer()
     int y;
     int slot;
     int pending;
+    int timing;
+    int64_t expand_us;
+    int64_t spi_us;
 
-    if (!ready || pixels == nullptr || band == nullptr) {
+    timing = frame_profile_on();
+    expand_us = 0;
+    spi_us = 0;
+    if (!ready || pixels == nullptr || band == nullptr || g_row_count == 0) {
+        if (timing) {
+            frame_profile_add(FRAME_EXPAND, 0);
+            frame_profile_add(FRAME_SPI, 0);
+        }
         return;
     }
     slot = 0;
     pending = 0;
-    for (y = 0; y < k_height; y += k_band_rows) {
-        int rows = k_band_rows;
+    y = 0;
+    while (y < k_height) {
+        int y0;
+        int rows;
         int row;
         uint16_t *dst_band;
+        int64_t t0 = 0;
 
+        if (!row_kept(y)) {
+            y++;
+            continue;
+        }
+        y0 = y;
+        rows = 0;
+        while (y < k_height && rows < k_band_rows && row_kept(y)) {
+            y++;
+            rows++;
+        }
         if (pending == 2) {
+            if (timing) {
+                t0 = esp_timer_get_time();
+            }
             spi_wait(done);
+            if (timing) {
+                spi_us += esp_timer_get_time() - t0;
+            }
             pending -= 1;
         }
-        if (y + rows > k_height) {
-            rows = k_height - y;
-        }
         dst_band = band + slot * k_band_pixels;
+        if (timing) {
+            t0 = esp_timer_get_time();
+        }
         for (row = 0; row < rows; row++) {
-            const uint8_t *src = pixels + static_cast<size_t>((y + row) * k_width);
+            const uint8_t *src = pixels + static_cast<size_t>((y0 + row) * k_width);
             uint16_t *dst = dst_band + row * k_width;
             int x;
 
@@ -510,13 +616,32 @@ void st7789_drawer::sendBuffer()
                 dst[x] = palette_rgb565[src[x]];
             }
         }
-        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(lcd, 0, y, k_width, y + rows, dst_band));
+        if (timing) {
+            expand_us += esp_timer_get_time() - t0;
+            t0 = esp_timer_get_time();
+        }
+        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(lcd, 0, y0, k_width, y0 + rows, dst_band));
+        if (timing) {
+            spi_us += esp_timer_get_time() - t0;
+        }
         pending += 1;
         slot ^= 1;
     }
     while (pending > 0) {
+        int64_t t0 = 0;
+
+        if (timing) {
+            t0 = esp_timer_get_time();
+        }
         spi_wait(done);
+        if (timing) {
+            spi_us += esp_timer_get_time() - t0;
+        }
         pending -= 1;
+    }
+    if (timing) {
+        frame_profile_add(FRAME_EXPAND, expand_us);
+        frame_profile_add(FRAME_SPI, spi_us);
     }
 }
 

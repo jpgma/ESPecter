@@ -8,6 +8,7 @@ extern "C" {
 #endif
 
 #define WORLD_VIEW 240
+#define WORLD_TICK_MS 12
 #define WORLD_BODY_W 8
 #define WORLD_BODY_H 12
 #define WORLD_SOLID_CAP 256
@@ -16,7 +17,7 @@ extern "C" {
 int world_init(void);
 /* [world_reset] Recarrega o percurso, devolve o checkpoint ao spawn, põe o corpo lá e encosta a câmera. */
 void world_reset(void);
-/* [world_tick] Integra um tick fixo. O pit e o spike abrem 16 ticks de morte e depois [body_place_at] no checkpoint. A saída congela até [world_reset]. A mola e [body_pose] só correm vivo. */
+/* [world_tick] Integra um tick fixo. O pit e o spike abrem 252 ms de morte e depois [body_place_at] no checkpoint. A saída congela até [world_reset]. A mola e [body_pose] só correm vivo. */
 void world_tick(const actions *input);
 /* [world_rect] Escreve a posição no mundo, em pixels, e o tamanho do Rect. */
 void world_rect(int *x, int *y, int *w, int *h);
