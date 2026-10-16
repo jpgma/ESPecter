@@ -11,11 +11,11 @@ extern "C" {
 #define WORLD_BODY_W 8
 #define WORLD_BODY_H 12
 
-/* [world_init] Monta o corpo no centro da célula 0, o chão, os muros e as plataformas na slice de [arena_level], e a câmera centrada com a mola parada. Devolve 0 se [arena_ready] servir. */
+/* [world_init] Monta o corpo no spawn, o percurso fixo na slice de [arena_level], o checkpoint no spawn e a câmera com a mola parada. Devolve 0 se [arena_ready] servir. */
 int world_init(void);
-/* [world_reset] Re-rola os dois muros e as seis plataformas, devolve o corpo ao centro da célula 0 e encosta a câmera. */
+/* [world_reset] Recarrega o percurso, devolve o checkpoint ao spawn, põe o corpo lá e encosta a câmera. */
 void world_reset(void);
-/* [world_tick] Integra um tick fixo; move_down solta o latch antes da corrida, a mola da câmera segue o meio horizontal e a linha do chão, e [body_pose] escolhe o clip. */
+/* [world_tick] Integra um tick fixo. O pit e o spike abrem 16 ticks de morte e depois [body_place_at] no checkpoint. A saída congela até [world_reset]. A mola e [body_pose] só correm vivo. */
 void world_tick(const actions *input);
 /* [world_rect] Escreve a posição no mundo, em pixels, e o tamanho do Rect. */
 void world_rect(int *x, int *y, int *w, int *h);
@@ -27,6 +27,12 @@ void world_camera(int *x, int *y);
 int world_solid_count(void);
 /* [world_solid_rect] Escreve o AABB index em pixels do mundo. Fora da contagem, zera a saída. */
 void world_solid_rect(int index, int *x, int *y, int *w, int *h);
+/* [world_spike_rect] Escreve o spike em pixels do mundo. */
+void world_spike_rect(int *x, int *y, int *w, int *h);
+/* [world_checkpoint_rect] Escreve o volume do checkpoint em pixels do mundo. */
+void world_checkpoint_rect(int *x, int *y, int *w, int *h);
+/* [world_exit_rect] Escreve a saída em pixels do mundo. */
+void world_exit_rect(int *x, int *y, int *w, int *h);
 
 #ifdef __cplusplus
 }

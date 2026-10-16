@@ -26,31 +26,42 @@
 #define WORLD_SPAN (WORLD_VIEW << WORLD_SUB)
 #define SOLID_CAP 256
 #define SOLID_COLS 6
-#define SOLID_USED 9
+#define SOLID_USED 10
 #define PLAY_H 16
-#define LANE_L 96
-#define LANE_R 144
-#define RIGHT_END 232
-#define LOW_TOP_LO 176
-#define LOW_TOP_HI 200
-#define MID_GAP_LO 32
-#define MID_GAP_HI 56
 #define WALL_W 16
-#define WALL_TOP_LO 8
-#define WALL_TOP_HI 24
-#define WALL_BOTTOM 200
-#define WALL_X_L_LO 64
-#define WALL_X_L_HI (LANE_L - WALL_W)
-#define WALL_X_R_LO LANE_R
-#define WALL_X_R_HI 160
-#define STACK_N 3
-#define STACK_TOP 8
-#define GROUND_CELL_X (-8)
+#define WALL_H 184
 #define GROUND_Y 224
-#define GROUND_W (17 * WORLD_VIEW)
 #define GROUND_H 32
-
-static const int low_widths[] = {40, 56, 72};
+#define PIT_Y (GROUND_Y + GROUND_H)
+#define WORLD_TAIL 11
+#define LIFE_PLAY 0
+#define LIFE_DYING 1
+#define LIFE_DONE 2
+#define DEATH_HOLD 16
+#define SPAWN_CELL_X 0
+#define SPAWN_CELL_Y 0
+#define SPAWN_X (((WORLD_VIEW - WORLD_BODY_W) / 2) << WORLD_SUB)
+#define SPAWN_Y (((WORLD_VIEW - WORLD_BODY_H) / 2) << WORLD_SUB)
+#define SPIKE_CX 1
+#define SPIKE_CY 0
+#define SPIKE_X 112
+#define SPIKE_Y 216
+#define SPIKE_W 48
+#define SPIKE_H 8
+#define CP_CX 1
+#define CP_CY 0
+#define CP_X 176
+#define CP_Y 176
+#define CP_W 16
+#define CP_H 48
+#define CP_STAND_X (180 << WORLD_SUB)
+#define CP_STAND_Y (212 << WORLD_SUB)
+#define EXIT_CX 2
+#define EXIT_CY 0
+#define EXIT_X 16
+#define EXIT_Y 192
+#define EXIT_W 16
+#define EXIT_H 32
 
 static int *row_x;
 static int *row_y;
@@ -78,7 +89,12 @@ static int *cam_y;
 static int *cam_vx;
 static int *cam_vy;
 static int *cam_ground;
-static int *roll_state;
+static int *life;
+static int *dead_hold;
+static int *cp_cell_x;
+static int *cp_x;
+static int *cp_cell_y;
+static int *cp_y;
 static int *solid_cx;
 static int *solid_cy;
 static int *solid_x;
@@ -765,13 +781,13 @@ static void cam_spring(void)
     cam_axis(cam_y, cam_vy, cam_focus_y());
 }
 
-/* [body_place] Põe o corpo no centro da célula 0, zerado, com a pose idle virada à direita, e encosta a câmera na linha dos pés com a mola parada. */
-static void body_place(void)
+/* [body_place_at] Põe o corpo no local em subpixels, zerado, com a pose idle virada à direita, e encosta a câmera na linha dos pés com a mola parada. */
+static void body_place_at(int cell_x, int x, int cell_y, int y)
 {
-    row_cell_x[0] = 0;
-    row_cell_y[0] = 0;
-    row_x[0] = ((WORLD_VIEW - WORLD_BODY_W) / 2) << WORLD_SUB;
-    row_y[0] = ((WORLD_VIEW - WORLD_BODY_H) / 2) << WORLD_SUB;
+    row_cell_x[0] = cell_x;
+    row_cell_y[0] = cell_y;
+    row_x[0] = x;
+    row_y[0] = y;
     row_w[0] = WORLD_BODY_W;
     row_h[0] = WORLD_BODY_H;
     row_vx[0] = 0;
@@ -795,30 +811,19 @@ static void body_place(void)
     *cam_vy = 0;
 }
 
-/* [roll_next] Avança o LCG da slice e devolve 15 bits. */
-static int roll_next(void)
+/* [body_place] Põe o corpo no spawn com [body_place_at]. */
+static void body_place(void)
 {
-    unsigned int state;
-
-    state = (unsigned int)*roll_state;
-    state = state * 1103515245u + 12345u;
-    *roll_state = (int)state;
-    return (int)((state >> 16) & 0x7fffu);
+    body_place_at(SPAWN_CELL_X, SPAWN_X, SPAWN_CELL_Y, SPAWN_Y);
 }
 
-/* [roll_pick] Devolve um inteiro em [lo, hi]. */
-static int roll_pick(int lo, int hi)
+/* [mark_spawn] Grava o spawn como checkpoint. */
+static void mark_spawn(void)
 {
-    if (hi <= lo) {
-        return lo;
-    }
-    return lo + roll_next() % (hi - lo + 1);
-}
-
-/* [roll_width] Devolve uma largura da tabela. */
-static int roll_width(const int *table, int count)
-{
-    return table[roll_next() % count];
+    *cp_cell_x = SPAWN_CELL_X;
+    *cp_x = SPAWN_X;
+    *cp_cell_y = SPAWN_CELL_Y;
+    *cp_y = SPAWN_Y;
 }
 
 /* [solid_put] Grava o AABB index na célula e no local em pixels. */
@@ -832,92 +837,23 @@ static void solid_put(int index, int cell_x, int cell_y, int x, int y, int w, in
     solid_h[index] = h;
 }
 
-/* [solid_over] Devolve o x do médio que cobre parte do baixo e fica fora do corredor. */
-static int solid_over(int low_x, int low_w, int width, int min_x, int max_edge)
+/* [solid_course] Grava os dois chãos, os muros e as seis plataformas. */
+static void solid_course(void)
 {
-    int lo;
-    int hi;
-
-    lo = low_x - width + 1;
-    if (lo < min_x) {
-        lo = min_x;
-    }
-    hi = low_x + low_w - 1;
-    if (hi > max_edge - width) {
-        hi = max_edge - width;
-    }
-    return roll_pick(lo, hi);
+    solid_put(0, 0, 0, 0, GROUND_Y, WORLD_VIEW, GROUND_H);
+    solid_put(1, 0, 0, 80, 16, WALL_W, WALL_H);
+    solid_put(2, 0, 0, 144, 16, WALL_W, WALL_H);
+    solid_put(3, 0, 0, 8, 184, 64, PLAY_H);
+    solid_put(4, 0, 0, 8, 144, 56, PLAY_H);
+    solid_put(5, 0, 0, 12, 104, 48, PLAY_H);
+    solid_put(6, 0, 0, 168, 184, 64, PLAY_H);
+    solid_put(7, 0, 0, 168, 144, 56, PLAY_H);
+    solid_put(8, 0, 0, 176, 104, 48, PLAY_H);
+    solid_put(9, 1, 0, 48, GROUND_Y, WORLD_VIEW, GROUND_H);
+    solid_count = SOLID_USED;
 }
 
-/* [roll_span] Devolve uma largura que cabe no bolso. Uma em cada quatro usa o bolso inteiro. */
-static int roll_span(int pocket)
-{
-    int w;
-
-    if (pocket < 32) {
-        return pocket;
-    }
-    if (roll_next() % 4 == 0) {
-        return pocket;
-    }
-    w = roll_width(low_widths, 3);
-    if (w > pocket) {
-        w = pocket;
-    }
-    return w;
-}
-
-/* [solid_wall] Grava um muro de 16 px que desce até 24 px acima do chão. */
-static void solid_wall(int index, int x)
-{
-    int top;
-
-    top = roll_pick(WALL_TOP_LO, WALL_TOP_HI);
-    solid_put(index, 0, 0, x, top, WALL_W, WALL_BOTTOM - top);
-}
-
-/* [solid_stack] Empilha três plataformas de 16 px no bolso, cada uma acima da anterior e fora do corredor. */
-static void solid_stack(int index, int min_x, int max_edge)
-{
-    int pocket;
-    int w;
-    int x;
-    int y;
-    int gap;
-    int i;
-
-    pocket = max_edge - min_x;
-    w = roll_span(pocket);
-    x = roll_pick(min_x, max_edge - w);
-    y = roll_pick(LOW_TOP_LO, LOW_TOP_HI);
-    solid_put(index, 0, 0, x, y, w, PLAY_H);
-    for (i = 1; i < STACK_N; i++) {
-        gap = roll_pick(MID_GAP_LO, MID_GAP_HI);
-        w = roll_span(pocket);
-        x = solid_over(x, solid_w[index + i - 1], w, min_x, max_edge);
-        y -= gap;
-        if (y < STACK_TOP) {
-            y = STACK_TOP;
-        }
-        solid_put(index + i, 0, 0, x, y, w, PLAY_H);
-    }
-}
-
-/* [solid_roll] Sorteia os dois muros altos ao lado do corredor e três plataformas em cada bolso. */
-static void solid_roll(void)
-{
-    int left_x;
-    int right_x;
-
-    left_x = roll_pick(WALL_X_L_LO, WALL_X_L_HI);
-    right_x = roll_pick(WALL_X_R_LO, WALL_X_R_HI);
-    solid_wall(1, left_x);
-    solid_wall(2, right_x);
-    solid_stack(3, 0, left_x);
-    solid_stack(6, right_x + WALL_W, RIGHT_END);
-}
-
-/* [solid_load] Grava o chão na slice de [arena_level] e chama [solid_roll]. Devolve 0 se couberem. */
+/* [solid_load] Grava o percurso de [solid_course] na slice de [arena_level]. Devolve 0 se couber. */
 static int solid_load(void)
 {
     arena_slice slice;
@@ -939,13 +875,11 @@ static int solid_load(void)
     solid_y = rows + SOLID_CAP * 3;
     solid_w = rows + SOLID_CAP * 4;
     solid_h = rows + SOLID_CAP * 5;
-    solid_put(0, GROUND_CELL_X, 0, 0, GROUND_Y, GROUND_W, GROUND_H);
-    solid_count = SOLID_USED;
-    solid_roll();
+    solid_course();
     return 0;
 }
 
-/* [world_init] Monta o corpo no centro da célula 0, o chão, os muros e as plataformas na slice de [arena_level], e a câmera centrada com a mola parada. Devolve 0 se [arena_ready] servir. */
+/* [world_init] Monta o corpo no spawn, o percurso fixo na slice de [arena_level], o checkpoint no spawn e a câmera com a mola parada. Devolve 0 se [arena_ready] servir. */
 int world_init(void)
 {
     arena_slice slice;
@@ -956,7 +890,7 @@ int world_init(void)
         return 1;
     }
     slice = arena_world();
-    need = (size_t)WORLD_CAP * (size_t)WORLD_COLS * sizeof(int) + 6u * sizeof(int);
+    need = (size_t)WORLD_CAP * (size_t)WORLD_COLS * sizeof(int) + (size_t)WORLD_TAIL * sizeof(int);
     if (slice.data == 0 || slice.size < need) {
         return 1;
     }
@@ -986,30 +920,92 @@ int world_init(void)
     cam_vx = cam_y + 1;
     cam_vy = cam_vx + 1;
     cam_ground = cam_vy + 1;
-    roll_state = cam_ground + 1;
-    *roll_state = 1;
+    life = cam_ground + 1;
+    dead_hold = life + 1;
+    cp_cell_x = dead_hold + 1;
+    cp_x = cp_cell_x + 1;
+    cp_cell_y = cp_x + 1;
+    cp_y = cp_cell_y + 1;
+    *life = LIFE_PLAY;
+    *dead_hold = 0;
     row_count = 1;
     if (solid_load() != 0) {
         return 1;
     }
+    mark_spawn();
     body_place();
     return 0;
 }
 
-/* [world_reset] Re-rola os dois muros e as seis plataformas, devolve o corpo ao centro da célula 0 e encosta a câmera. */
+/* [world_reset] Recarrega o percurso, devolve o checkpoint ao spawn, põe o corpo lá e encosta a câmera. */
 void world_reset(void)
 {
     if (row_count < 1) {
         return;
     }
-    solid_roll();
+    solid_course();
+    mark_spawn();
+    *life = LIFE_PLAY;
+    *dead_hold = 0;
     body_place();
 }
 
-/* [world_tick] Integra um tick fixo; move_down solta o latch antes da corrida, a mola da câmera segue o meio horizontal e a linha do chão, e [body_pose] escolhe o clip. */
+/* [mark_box] Escreve a marca em subpixels do mundo. */
+static void mark_box(int cell_x, int cell_y, int x, int y, int w, int h, int *left, int *top, int *right, int *bottom)
+{
+    int wx;
+    int wy;
+
+    wx = cell_x * WORLD_VIEW + x;
+    wy = cell_y * WORLD_VIEW + y;
+    *left = wx << WORLD_SUB;
+    *top = wy << WORLD_SUB;
+    *right = (wx + w) << WORLD_SUB;
+    *bottom = (wy + h) << WORLD_SUB;
+}
+
+/* [body_hits] Devolve 1 se o AABB cruza a marca. Aresta encostada não conta, como [range_overlaps]. */
+static int body_hits(int cell_x, int cell_y, int x, int y, int w, int h)
+{
+    int left;
+    int top;
+    int right;
+    int bottom;
+    int bx;
+    int by;
+    int bw;
+    int bh;
+
+    mark_box(cell_x, cell_y, x, y, w, h, &left, &top, &right, &bottom);
+    bx = compose_sub(row_cell_x[0], row_x[0]);
+    by = compose_sub(row_cell_y[0], row_y[0]);
+    bw = row_w[0] << WORLD_SUB;
+    bh = row_h[0] << WORLD_SUB;
+    return range_overlaps(bx, bx + bw, left, right) && range_overlaps(by, by + bh, top, bottom);
+}
+
+/* [body_fallen] Devolve 1 se os pés passaram de PIT_Y. */
+static int body_fallen(void)
+{
+    return cam_feet() > (PIT_Y << WORLD_SUB);
+}
+
+/* [world_tick] Integra um tick fixo. O pit e o spike abrem 16 ticks de morte e depois [body_place_at] no checkpoint. A saída congela até [world_reset]. A mola e [body_pose] só correm vivo. */
 void world_tick(const actions *input)
 {
     if (row_count < 1 || input == 0) {
+        return;
+    }
+    if (*life == LIFE_DONE) {
+        return;
+    }
+    if (*life == LIFE_DYING) {
+        *dead_hold -= 1;
+        if (*dead_hold <= 0) {
+            body_place_at(*cp_cell_x, *cp_x, *cp_cell_y, *cp_y);
+            *life = LIFE_PLAY;
+            row_jump_was[0] = input->jump ? 1 : 0;
+        }
         return;
     }
     if (input->move_down) {
@@ -1020,6 +1016,23 @@ void world_tick(const actions *input)
     body_slide();
     body_solve_x(input);
     body_solve_y();
+    if (body_fallen() || body_hits(SPIKE_CX, SPIKE_CY, SPIKE_X, SPIKE_Y, SPIKE_W, SPIKE_H)) {
+        *life = LIFE_DYING;
+        *dead_hold = DEATH_HOLD;
+        return;
+    }
+    if (body_hits(CP_CX, CP_CY, CP_X, CP_Y, CP_W, CP_H)) {
+        *cp_cell_x = CP_CX;
+        *cp_x = CP_STAND_X;
+        *cp_cell_y = CP_CY;
+        *cp_y = CP_STAND_Y;
+    }
+    if (body_hits(EXIT_CX, EXIT_CY, EXIT_X, EXIT_Y, EXIT_W, EXIT_H)) {
+        row_vx[0] = 0;
+        row_vy[0] = 0;
+        *life = LIFE_DONE;
+        return;
+    }
     body_jump(input);
     cam_spring();
     body_pose();
@@ -1087,4 +1100,31 @@ void world_solid_rect(int index, int *x, int *y, int *w, int *h)
     *y = solid_cy[index] * WORLD_VIEW + solid_y[index];
     *w = solid_w[index];
     *h = solid_h[index];
+}
+
+/* [mark_rect] Escreve a marca em pixels do mundo. */
+static void mark_rect(int cell_x, int cell_y, int x, int y, int w, int h, int *ox, int *oy, int *ow, int *oh)
+{
+    *ox = cell_x * WORLD_VIEW + x;
+    *oy = cell_y * WORLD_VIEW + y;
+    *ow = w;
+    *oh = h;
+}
+
+/* [world_spike_rect] Escreve o spike em pixels do mundo. */
+void world_spike_rect(int *x, int *y, int *w, int *h)
+{
+    mark_rect(SPIKE_CX, SPIKE_CY, SPIKE_X, SPIKE_Y, SPIKE_W, SPIKE_H, x, y, w, h);
+}
+
+/* [world_checkpoint_rect] Escreve o volume do checkpoint em pixels do mundo. */
+void world_checkpoint_rect(int *x, int *y, int *w, int *h)
+{
+    mark_rect(CP_CX, CP_CY, CP_X, CP_Y, CP_W, CP_H, x, y, w, h);
+}
+
+/* [world_exit_rect] Escreve a saída em pixels do mundo. */
+void world_exit_rect(int *x, int *y, int *w, int *h)
+{
+    mark_rect(EXIT_CX, EXIT_CY, EXIT_X, EXIT_Y, EXIT_W, EXIT_H, x, y, w, h);
 }

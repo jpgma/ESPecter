@@ -683,6 +683,11 @@ support a decision. Keep links to the detailed agent report.
   2026-10-16   The camera keeps the body on the horizontal architecture.md                  medium       The ground margin or the
                middle and the ground line 32 px above the                          spring tune changes
                bottom. A jump does not lift the view
+  2026-10-16   The course is fixed: a wall-jump slot,     architecture.md                  medium       The course layout
+               a pit, one spike, a checkpoint, and an                            or the death hold
+               exit. Death holds 16 ticks, then the
+               last checkpoint. The exit freezes
+               until reset. The LCG is gone
 
 ## 7. Research execution plan
 

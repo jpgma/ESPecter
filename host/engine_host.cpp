@@ -12,6 +12,7 @@
 #include "graphics/FontManager.h"
 #include "graphics/Renderer.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
@@ -80,6 +81,7 @@ int g_fps = -1;
 unsigned long g_fps_ms;
 int g_fps_frames;
 int g_debug;
+const uint16_t g_hazard_rgb = (uint16_t)((31u << 11) | 31u);
 #ifdef PLATFORM_NATIVE
 int g_prev_grave;
 int g_prev_r;
@@ -138,6 +140,23 @@ int box_hits_view(int cam_x, int cam_y, int x, int y, int w, int h)
         return 0;
     }
     return x < cam_x + WORLD_VIEW && cam_x < x + w && y < cam_y + WORLD_VIEW && cam_y < y + h;
+}
+
+/* [draw_world_fill] Pinta o AABB de mundo se [clip_view] deixar área. */
+void draw_world_fill(pixelroot32::graphics::Renderer &renderer, int cam_x, int cam_y, int x, int y, int w, int h,
+                     uint16_t color)
+{
+    if (clip_view(cam_x, cam_y, &x, &y, &w, &h)) {
+        renderer.drawFilledRectangleW(x, y, w, h, color);
+    }
+}
+
+/* [draw_world_outline] Traça o AABB de mundo em branco se ele cruza a View. */
+void draw_world_outline(pixelroot32::graphics::Renderer &renderer, int cam_x, int cam_y, int x, int y, int w, int h)
+{
+    if (box_hits_view(cam_x, cam_y, x, y, w, h)) {
+        renderer.drawRectangle(x, y, w, h, pixelroot32::graphics::Color::White);
+    }
 }
 
 /* [draw_body] Desenha as quatro layers 1bpp de [world_body_pose] com os pés e o centro no AABB. */
@@ -256,13 +275,17 @@ public:
         note_frame(delta_time);
     }
 
-    /* [rect_scene::draw] Pinta o ground, os sólidos e o corpo no offset da câmera. Com o debug, o wireframe das células, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No device a cor do ground vem de [link_ground]. */
+    /* [rect_scene::draw] Pinta o ground, os sólidos, o spike, o checkpoint, a saída e o corpo no offset da câmera. Com o debug, o wireframe das células, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No device a cor do ground vem de [link_ground]. */
     void draw(pixelroot32::graphics::Renderer &renderer) override
     {
         int cam_x;
         int cam_y;
         int count;
         int i;
+        int mx;
+        int my;
+        int mw;
+        int mh;
 
         world_camera(&cam_x, &cam_y);
         renderer.setOffsetBypass(true);
@@ -285,6 +308,12 @@ public:
                 renderer.drawFilledRectangle(sx, sy, sw, sh, pixelroot32::graphics::Color::Black);
             }
         }
+        world_spike_rect(&mx, &my, &mw, &mh);
+        draw_world_fill(renderer, cam_x, cam_y, mx, my, mw, mh, g_hazard_rgb);
+        world_checkpoint_rect(&mx, &my, &mw, &mh);
+        draw_world_outline(renderer, cam_x, cam_y, mx, my, mw, mh);
+        world_exit_rect(&mx, &my, &mw, &mh);
+        draw_world_outline(renderer, cam_x, cam_y, mx, my, mw, mh);
         draw_body(renderer, cam_x, cam_y);
         if (g_debug) {
             int x0;
