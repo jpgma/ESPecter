@@ -3,6 +3,7 @@
 #include "actions.h"
 #include "arena.h"
 #include "body_sheet.h"
+#include "palette.h"
 #include "world.h"
 
 #include "core/Engine.h"
@@ -159,7 +160,7 @@ void draw_world_outline(pixelroot32::graphics::Renderer &renderer, int cam_x, in
     }
 }
 
-/* [draw_body] Desenha as quatro layers 1bpp de [world_body_pose] com os pés e o centro no AABB. */
+/* [draw_body] Desenha o quadro 8bpp de [world_body_pose] com os pés e o centro no AABB. Índice 0 não pinta. */
 void draw_body(pixelroot32::graphics::Renderer &renderer, int cam_x, int cam_y)
 {
     int x;
@@ -169,13 +170,11 @@ void draw_body(pixelroot32::graphics::Renderer &renderer, int cam_x, int cam_y)
     int clip;
     int frame;
     int face;
-    int layer;
-    const pixelroot32::graphics::Color colors[BODY_LAYER_COUNT] = {
-        pixelroot32::graphics::Color::LightGreen,
-        pixelroot32::graphics::Color::Cyan,
-        pixelroot32::graphics::Color::Orange,
-        pixelroot32::graphics::Color::Red,
-    };
+    int row;
+    int col;
+    int ox;
+    int oy;
+    const uint8_t *px;
 
     world_rect(&x, &y, &w, &h);
     x -= (BODY_SHEET_W - w) / 2;
@@ -184,18 +183,36 @@ void draw_body(pixelroot32::graphics::Renderer &renderer, int cam_x, int cam_y)
         return;
     }
     world_body_pose(&clip, &frame, &face);
-    for (layer = 0; layer < BODY_LAYER_COUNT; layer++) {
-        const uint16_t *rows;
-        pixelroot32::graphics::Sprite sprite;
+    px = body_sheet_frame(clip, frame);
+    if (px == nullptr) {
+        return;
+    }
+    ox = 0;
+    oy = 0;
+    if (!renderer.isOffsetBypassEnabled()) {
+        ox = renderer.getXOffset();
+        oy = renderer.getYOffset();
+    }
+    pixelroot32::graphics::DrawSurface &surface = renderer.getDrawSurface();
+    for (row = 0; row < BODY_SHEET_H; row++) {
+        for (col = 0; col < BODY_SHEET_W; col++) {
+            int sx;
+            int sy;
+            uint8_t index;
 
-        rows = body_sheet_rows(clip, frame, layer);
-        if (rows == nullptr) {
-            continue;
+            index = px[row * BODY_SHEET_W + col];
+            if (index == 0) {
+                continue;
+            }
+            sx = face < 0 ? x + (BODY_SHEET_W - 1 - col) : x + col;
+            sy = y + row;
+            sx += ox;
+            sy += oy;
+            if (sx < 0 || sy < 0 || sx >= WORLD_VIEW || sy >= WORLD_VIEW) {
+                continue;
+            }
+            surface.drawPixel(sx, sy, palette_rgb565[index]);
         }
-        sprite.data = rows;
-        sprite.width = BODY_SHEET_W;
-        sprite.height = BODY_SHEET_H;
-        renderer.drawSprite(sprite, x, y, colors[layer], face < 0);
     }
 }
 

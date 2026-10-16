@@ -13,7 +13,7 @@ public:
 
     /* [st7789_drawer::init] Sobe o SPI3, dois bands DMA e o panel, zera os índices uma vez, depois [backlight_start]. */
     void init() override;
-    /* [st7789_drawer::clearBuffer] Reinicia a palette. Os índices ficam; a cena cobre a View. */
+    /* [st7789_drawer::clearBuffer] Não mexe na palette nem nos índices. A cena cobre a View. */
     void clearBuffer() override;
     /* [st7789_drawer::sendBuffer] Converte o band ocioso enquanto o outro segue no DMA. */
     void sendBuffer() override;
@@ -23,13 +23,11 @@ public:
     void drawFilledRectangle(int x, int y, int w, int h, uint16_t color) override;
 
 private:
-    /* [st7789_drawer::index_for] Devolve o índice da cor na palette, criando entrada se couber. */
+    /* [st7789_drawer::index_for] Devolve o índice dessa RGB565 em palette_rgb565. Se não achar, devolve 0. */
     uint8_t index_for(uint16_t color);
 
     uint8_t *pixels;
     uint16_t *band;
-    uint16_t palette[16];
-    int palette_count;
     int ready;
     void *panel;
     void *panel_io;

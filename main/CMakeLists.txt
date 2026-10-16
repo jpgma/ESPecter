@@ -21,6 +21,7 @@ idf_component_register(
         "actions_pad.c"
         "${ROOT}/game/arena.c"
         "${ROOT}/game/body_sheet.c"
+        "${ROOT}/game/palette.c"
         "${ROOT}/game/world.c"
         "${ROOT}/host/engine_host.cpp"
         "${ROOT}/host/st7789_drawer.cpp"

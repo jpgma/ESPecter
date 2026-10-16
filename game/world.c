@@ -7,6 +7,8 @@
 #define WORLD_SUB 8
 #define WORLD_RUN_ACCEL 64
 #define WORLD_RUN_MAX 700
+#define WORLD_JOG_MIN (WORLD_RUN_MAX / 2)
+#define BODY_TICK_MS 16
 #define WORLD_GRAVITY_RISE 128
 #define WORLD_GRAVITY_FALL 256
 #define WORLD_JUMP_VY (-2048)
@@ -17,8 +19,6 @@
 #define BODY_ACT_NONE 0
 #define BODY_ACT_FLOOR 1
 #define BODY_ACT_WALL 2
-#define BODY_HOLD_SLOW 4
-#define BODY_HOLD_FAST 2
 #define WORLD_CAM_STIFF 2
 #define WORLD_CAM_DAMP_NUM 3
 #define WORLD_CAM_DAMP_DEN 8
@@ -561,16 +561,28 @@ static void body_face_now(void)
     }
 }
 
-/* [body_hold_ticks] Devolve os ticks do quadro. Idle não avança. */
-static int body_hold_ticks(int clip)
+/* [body_frame_ms] Devolve os ms do quadro, no tempo dos showcases. Idle não avança. */
+static int body_frame_ms(int clip, int frame)
 {
-    if (clip == BODY_CLIP_WALK || clip == BODY_CLIP_WALL) {
-        return BODY_HOLD_SLOW;
+    if (clip == BODY_CLIP_WALK || clip == BODY_CLIP_JUMP || clip == BODY_CLIP_WALL) {
+        return 120;
+    }
+    if (clip == BODY_CLIP_JOG) {
+        return 80;
+    }
+    if (clip == BODY_CLIP_JUMP_TURN && frame > 0) {
+        return 120;
     }
     if (clip == BODY_CLIP_IDLE) {
         return 0;
     }
-    return BODY_HOLD_FAST;
+    return 60;
+}
+
+/* [body_gait] Devolve 1 se o clip é walk, jog ou run. */
+static int body_gait(int clip)
+{
+    return clip == BODY_CLIP_WALK || clip == BODY_CLIP_JOG || clip == BODY_CLIP_RUN;
 }
 
 /* [body_oneshot] Devolve 1 se o clip toca uma vez e solta. */
@@ -593,7 +605,7 @@ static void body_restart(int clip)
     row_hold[0] = 0;
 }
 
-/* [body_enter] Troca o clip. Walk e run conservam o quadro. */
+/* [body_enter] Troca o clip. Walk, jog e run conservam o quadro. */
 static void body_enter(int clip)
 {
     int keep;
@@ -601,8 +613,7 @@ static void body_enter(int clip)
     if (row_clip[0] == clip) {
         return;
     }
-    keep = (row_clip[0] == BODY_CLIP_WALK && clip == BODY_CLIP_RUN)
-        || (row_clip[0] == BODY_CLIP_RUN && clip == BODY_CLIP_WALK);
+    keep = body_gait(row_clip[0]) && body_gait(clip);
     if (!keep) {
         body_restart(clip);
         return;
@@ -614,7 +625,7 @@ static void body_enter(int clip)
     }
 }
 
-/* [body_advance_due] Avança o quadro quando o hold enche. Devolve 1 se o one-shot terminou. */
+/* [body_advance_due] Avança o quadro quando o hold chega em [body_frame_ms]. O resto fica. Devolve 1 se o one-shot terminou. */
 static int body_advance_due(void)
 {
     int clip;
@@ -623,11 +634,11 @@ static int body_advance_due(void)
 
     clip = row_clip[0];
     frames = body_sheet_frames(clip);
-    need = body_hold_ticks(clip);
+    need = body_frame_ms(clip, row_frame[0]);
     if (frames <= 0 || need <= 0 || row_hold[0] < need) {
         return 0;
     }
-    row_hold[0] = 0;
+    row_hold[0] -= need;
     if (row_frame[0] + 1 < frames) {
         row_frame[0] += 1;
         return 0;
@@ -635,52 +646,57 @@ static int body_advance_due(void)
     if (clip == BODY_CLIP_JUMP) {
         return 0;
     }
-    if (clip == BODY_CLIP_WALK || clip == BODY_CLIP_RUN || clip == BODY_CLIP_WALL) {
+    if (body_gait(clip) || clip == BODY_CLIP_WALL) {
         row_frame[0] = 0;
         return 0;
     }
     return 1;
 }
 
-/* [body_commit] Soma um tick no hold do clip que ficou para o desenho. */
+/* [body_commit] Soma 16 ms no hold do clip que ficou para o desenho. */
 static void body_commit(void)
 {
     int need;
 
-    need = body_hold_ticks(row_clip[0]);
+    need = body_frame_ms(row_clip[0], row_frame[0]);
     if (need <= 0) {
         return;
     }
-    row_hold[0] += 1;
+    row_hold[0] += BODY_TICK_MS;
 }
 
-/* [body_select_ground] Escolhe idle, walk, run ou a virada no chão. */
+/* [body_select_ground] Escolhe idle, walk, jog, run ou a virada no chão. */
 static void body_select_ground(void)
 {
+    int speed;
+    int clip;
+
     if (body_turned()) {
         body_restart(BODY_CLIP_RUN_TURN);
         return;
     }
-    if (body_speed() >= WORLD_RUN_MAX) {
-        if (row_clip[0] == BODY_CLIP_RUN) {
-            body_advance_due();
+    speed = body_speed();
+    if (speed >= WORLD_RUN_MAX) {
+        clip = BODY_CLIP_RUN;
+    } else if (speed >= WORLD_JOG_MIN) {
+        clip = BODY_CLIP_JOG;
+    } else if (row_vx[0] != 0) {
+        clip = BODY_CLIP_WALK;
+    } else {
+        clip = BODY_CLIP_IDLE;
+    }
+    if (clip == BODY_CLIP_IDLE) {
+        if (row_clip[0] == BODY_CLIP_IDLE) {
             return;
         }
-        body_enter(BODY_CLIP_RUN);
+        body_restart(BODY_CLIP_IDLE);
         return;
     }
-    if (row_vx[0] != 0) {
-        if (row_clip[0] == BODY_CLIP_WALK) {
-            body_advance_due();
-            return;
-        }
-        body_enter(BODY_CLIP_WALK);
+    if (row_clip[0] == clip) {
+        body_advance_due();
         return;
     }
-    if (row_clip[0] == BODY_CLIP_IDLE) {
-        return;
-    }
-    body_restart(BODY_CLIP_IDLE);
+    body_enter(clip);
 }
 
 /* [body_select_air] Continua o jump, segura o último quadro depois do dash, ou começa a virada. */

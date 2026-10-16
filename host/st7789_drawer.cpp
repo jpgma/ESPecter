@@ -1,5 +1,7 @@
 #include "st7789_drawer.h"
 
+#include "palette.h"
+
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/spi_master.h"
@@ -158,9 +160,8 @@ namespace especter {
 
 /* [st7789_drawer] Deixa o panel fechado. [st7789_drawer::init] aloca o framebuffer. */
 st7789_drawer::st7789_drawer()
-    : pixels(nullptr), band(nullptr), palette_count(1), ready(0), panel(nullptr), panel_io(nullptr), spi_done(nullptr)
+    : pixels(nullptr), band(nullptr), ready(0), panel(nullptr), panel_io(nullptr), spi_done(nullptr)
 {
-    palette[0] = 0;
 }
 
 /* [st7789_drawer::~st7789_drawer] Não libera o panel. O LCD fica ligado até o reset. */
@@ -168,20 +169,15 @@ st7789_drawer::~st7789_drawer()
 {
 }
 
-/* [st7789_drawer::index_for] Devolve o índice da cor na palette, criando entrada se couber. */
+/* [st7789_drawer::index_for] Devolve o índice dessa RGB565 em palette_rgb565. Se não achar, devolve 0. */
 uint8_t st7789_drawer::index_for(uint16_t color)
 {
     int i;
 
-    for (i = 0; i < palette_count; i++) {
-        if (palette[i] == color) {
+    for (i = 0; i < PALETTE_COUNT; i++) {
+        if (palette_rgb565[i] == color) {
             return static_cast<uint8_t>(i);
         }
-    }
-    if (palette_count < 16) {
-        palette[palette_count] = color;
-        palette_count++;
-        return static_cast<uint8_t>(palette_count - 1);
     }
     return 0;
 }
@@ -254,11 +250,9 @@ void st7789_drawer::init()
     ready = 1;
 }
 
-/* [st7789_drawer::clearBuffer] Reinicia a palette. Os índices ficam; a cena cobre a View. */
+/* [st7789_drawer::clearBuffer] Não mexe na palette nem nos índices. A cena cobre a View. */
 void st7789_drawer::clearBuffer()
 {
-    palette_count = 1;
-    palette[0] = 0;
 }
 
 /* [st7789_drawer::drawPixel] Grava um índice da palette no pixel. */
@@ -342,7 +336,7 @@ void st7789_drawer::sendBuffer()
             int x;
 
             for (x = 0; x < k_width; x++) {
-                dst[x] = palette[src[x]];
+                dst[x] = palette_rgb565[src[x]];
             }
         }
         ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(lcd, 0, y, k_width, y + rows, dst_band));

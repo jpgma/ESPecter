@@ -1,6 +1,7 @@
-"""Pack the No Outlines body sheets into four 1bpp layers.
+"""Pack the No Outlines body sheets into 8bpp palette indices.
 
-Stdlib only. Bit 15 of each row is the left pixel, matching Renderer::drawSprite.
+Stdlib only. Run tools/gen_palette.py first. Index 0 is transparent.
+Opaque pixels fold to the nearest of the four pinned fills.
 """
 
 import struct
@@ -12,11 +13,11 @@ SHEETS = ROOT / "refs" / "2DPlatformerCharacterTemplate_AssetPack" / "Sheets" / 
 OUT_C = ROOT / "game" / "body_sheet.c"
 
 CELL = 16
-LAYERS = 4
 
 CLIPS = [
     ("BODY_CLIP_IDLE", "2DPCT_Idle_NO.png"),
     ("BODY_CLIP_WALK", "2DPCT_Walk_NO.png"),
+    ("BODY_CLIP_JOG", "2DPCT_Jog_NO.png"),
     ("BODY_CLIP_RUN", "2DPCT_Run_NO.png"),
     ("BODY_CLIP_RUN_TURN", "2DPCT_RunTurn_NO.png"),
     ("BODY_CLIP_JUMP", "2DPCT_Jump_NO.png"),
@@ -25,13 +26,29 @@ CLIPS = [
     ("BODY_CLIP_WALL", "2DPCT_WallSlide_NO.png"),
 ]
 
-# The four fills, measured as the most common opaque colors. Extras fold to the nearest.
-CENTROIDS = (
-    (153, 230, 95),
-    (0, 205, 249),
-    (255, 162, 20),
-    (245, 85, 93),
+# Sheet fills, in the order an opaque pixel is matched. The index is the pinned slot.
+FILLS = (
+    ((153, 230, 95), "PALETTE_BODY_LEAF"),
+    ((0, 205, 249), "PALETTE_BODY_GLASS"),
+    ((255, 162, 20), "PALETTE_BODY_EMBER"),
+    ((245, 85, 93), "PALETTE_BODY_KILN"),
 )
+
+
+def fill_slots():
+    text = (ROOT / "game" / "palette.h").read_text(encoding="utf-8")
+    slots = []
+    for rgb, name in FILLS:
+        index = None
+        prefix = f"#define {name} "
+        for line in text.splitlines():
+            if line.startswith(prefix):
+                index = int(line[len(prefix) :])
+                break
+        if index is None:
+            raise SystemExit(f"missing {name} in palette.h")
+        slots.append((rgb, index))
+    return slots
 
 
 def paeth(a, b, c):
@@ -101,34 +118,35 @@ def read_png(path):
     return pixels
 
 
-def layer_of(r, g, b, a):
+def index_of(r, g, b, a, slots):
     if a < 128:
-        return -1
-    best = 0
+        return 0
+    best = slots[0][1]
     best_d = None
-    for i, (cr, cg, cb) in enumerate(CENTROIDS):
+    for (cr, cg, cb), index in slots:
         d = (r - cr) * (r - cr) + (g - cg) * (g - cg) + (b - cb) * (b - cb)
         if best_d is None or d < best_d:
-            best = i
+            best = index
             best_d = d
     return best
 
 
-def cell_bits(pixels, ox, oy):
-    layers = [[0] * CELL for _ in range(LAYERS)]
+def cell_bytes(pixels, ox, oy, slots):
+    rows = []
     opaque = 0
     for y in range(CELL):
+        row = []
         for x in range(CELL):
             r, g, b, a = pixels[oy + y][ox + x]
-            layer = layer_of(r, g, b, a)
-            if layer < 0:
-                continue
-            opaque += 1
-            layers[layer][y] |= 1 << (CELL - 1 - x)
-    return layers, opaque
+            index = index_of(r, g, b, a, slots)
+            if index != 0:
+                opaque += 1
+            row.append(index)
+        rows.append(row)
+    return rows, opaque
 
 
-def pack():
+def pack(slots):
     frames = []
     counts = []
     for _name, filename in CLIPS:
@@ -140,10 +158,10 @@ def pack():
         clip_frames = []
         for cy in range(height // CELL):
             for cx in range(width // CELL):
-                layers, opaque = cell_bits(pixels, cx * CELL, cy * CELL)
+                rows, opaque = cell_bytes(pixels, cx * CELL, cy * CELL, slots)
                 if opaque == 0:
                     continue
-                clip_frames.append(layers)
+                clip_frames.append(rows)
         if not clip_frames:
             raise SystemExit(f"no frames in {filename}")
         counts.append(len(clip_frames))
@@ -156,11 +174,11 @@ def emit(frames, counts):
     lines.append('#include "body_sheet.h"')
     lines.append("")
     lines.append("/* RunTurn e JumpTurn nascem virados à direita. Nenhum quadro olha à esquerda, então o flip do host não espelha duas vezes. */")
-    lines.append("static const uint16_t sheet_rows[] = {")
+    lines.append("static const uint8_t sheet_px[] = {")
     for clip_frames in frames:
-        for layers in clip_frames:
-            for layer in layers:
-                words = ", ".join(f"0x{word:04x}" for word in layer)
+        for rows in clip_frames:
+            for row in rows:
+                words = ", ".join(f"0x{index:02x}" for index in row)
                 lines.append(f"    {words},")
     lines.append("};")
     lines.append("")
@@ -177,13 +195,13 @@ def emit(frames, counts):
     lines.append("    return sheet_frames[clip];")
     lines.append("}")
     lines.append("")
-    lines.append("/* [body_sheet_rows] Devolve as 16 linhas 1bpp da layer do quadro. Fora da faixa, devolve 0. */")
-    lines.append("const uint16_t *body_sheet_rows(int clip, int frame, int layer)")
+    lines.append("/* [body_sheet_frame] Devolve os 256 índices do quadro. Fora da faixa, devolve 0. */")
+    lines.append("const uint8_t *body_sheet_frame(int clip, int frame)")
     lines.append("{")
     lines.append("    int base;")
     lines.append("    int i;")
     lines.append("")
-    lines.append("    if (clip < 0 || clip >= BODY_CLIP_COUNT || layer < 0 || layer >= BODY_LAYER_COUNT) {")
+    lines.append("    if (clip < 0 || clip >= BODY_CLIP_COUNT) {")
     lines.append("        return 0;")
     lines.append("    }")
     lines.append("    if (frame < 0 || frame >= sheet_frames[clip]) {")
@@ -194,17 +212,17 @@ def emit(frames, counts):
     lines.append("        base += sheet_frames[i];")
     lines.append("    }")
     lines.append("    base += frame;")
-    lines.append("    return sheet_rows + (base * BODY_LAYER_COUNT + layer) * BODY_SHEET_H;")
+    lines.append("    return sheet_px + base * BODY_SHEET_W * BODY_SHEET_H;")
     lines.append("}")
     lines.append("")
     OUT_C.write_text("\n".join(lines), encoding="utf-8", newline="\n")
 
 
 def main():
-    frames, counts = pack()
+    frames, counts = pack(fill_slots())
     total = sum(counts)
     emit(frames, counts)
-    nbytes = total * LAYERS * CELL * 2
+    nbytes = total * CELL * CELL
     print("frames", counts, "total", total, "bytes", nbytes)
 
 
