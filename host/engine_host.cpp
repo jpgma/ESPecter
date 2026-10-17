@@ -6,6 +6,10 @@
 #include "palette.h"
 #include "world.h"
 
+extern "C" {
+#include "map.h"
+}
+
 #include "core/Engine.h"
 #include "core/Scene.h"
 #include "graphics/Color.h"
@@ -127,6 +131,7 @@ struct draw_view {
     int face;
     int solid_count;
     view_rect solids[WORLD_SOLID_CAP];
+    uint8_t solid_kind[WORLD_SOLID_CAP];
     view_rect spike;
     view_rect checkpoint;
     view_rect exit_box;
@@ -220,6 +225,31 @@ int box_hits_view(int cam_x, int cam_y, int x, int y, int w, int h)
         return 0;
     }
     return x < cam_x + WORLD_VIEW && cam_x < x + w && y < cam_y + WORLD_VIEW && cam_y < y + h;
+}
+
+/* [draw_slope] Pinta as fileiras sólidas da rampa em preto. O retângulo publicado continua o tile inteiro. */
+void draw_slope(pixelroot32::graphics::Renderer &renderer, int cam_x, int cam_y, int tile_x, int tile_y, int kind)
+{
+    int row;
+    int lx;
+    int lw;
+    int sx;
+    int sy;
+    int sw;
+    int sh;
+
+    for (row = 0; row < MAP_TILE; row++) {
+        if (!world_slope_row(kind, row, &lx, &lw)) {
+            continue;
+        }
+        sx = tile_x + lx;
+        sy = tile_y + row;
+        sw = lw;
+        sh = 1;
+        if (clip_view(cam_x, cam_y, &sx, &sy, &sw, &sh)) {
+            renderer.drawFilledRectangle(sx, sy, sw, sh, pixelroot32::graphics::Color::Black);
+        }
+    }
 }
 
 /* [draw_world_fill] Pinta o AABB de mundo se [clip_view] deixar área. */
@@ -399,8 +429,11 @@ void publish_view(void)
     }
     g_slot->view.solid_count = count;
     for (i = 0; i < count; i++) {
+        int kind;
+
         world_solid_rect(i, &g_slot->view.solids[i].x, &g_slot->view.solids[i].y, &g_slot->view.solids[i].w,
-                         &g_slot->view.solids[i].h);
+                         &g_slot->view.solids[i].h, &kind);
+        g_slot->view.solid_kind[i] = (uint8_t)kind;
     }
     world_spike_rect(&g_slot->view.spike.x, &g_slot->view.spike.y, &g_slot->view.spike.w, &g_slot->view.spike.h);
     world_checkpoint_rect(&g_slot->view.checkpoint.x, &g_slot->view.checkpoint.y, &g_slot->view.checkpoint.w,
@@ -728,7 +761,9 @@ public:
             sy = g_shown->solids[i].y;
             sw = g_shown->solids[i].w;
             sh = g_shown->solids[i].h;
-            if (clip_view(cam_x, cam_y, &sx, &sy, &sw, &sh)) {
+            if (world_slope(g_shown->solid_kind[i])) {
+                draw_slope(renderer, cam_x, cam_y, sx, sy, g_shown->solid_kind[i]);
+            } else if (clip_view(cam_x, cam_y, &sx, &sy, &sw, &sh)) {
                 renderer.drawFilledRectangle(sx, sy, sw, sh, pixelroot32::graphics::Color::Black);
             }
         }

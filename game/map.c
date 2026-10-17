@@ -3,7 +3,10 @@
 /* Célula 0: chão na fileira 14, muros nas colunas 5 e 9, plataformas nas laterais.
    A fileira 11, colunas 0 a 3, é one-way.
    Célula 1: fosso de 3 tiles, depois o chão, um spike e um checkpoint.
-   Células 2 a 7: chão. A saída é o tile da célula 2. O resto da faixa é vazio. */
+   Célula 2: vão do shuttle. Célula 3: onda de rampas na fileira 13, sobre o chão.
+   Da coluna 62, fileira 13, uma 45° sobe um tile por coluna até a fileira 1.
+   Da coluna 75, fileira 1, uma 45° desce até a fileira 13. A saída fica na coluna 89.
+   Células 4 a 7: chão. O resto da faixa é vazio. */
 
 static const uint8_t strip[MAP_H * MAP_W] = {
     [1 * MAP_W + 5] = MAP_SET,
@@ -50,7 +53,46 @@ static const uint8_t strip[MAP_H * MAP_W] = {
     [11 * MAP_W + 14] = MAP_SET,
     [13 * MAP_W + 22] = MAP_SPIKE,
     [13 * MAP_W + 26] = MAP_CHECKPOINT,
-    [13 * MAP_W + 31] = MAP_EXIT,
+    [13 * MAP_W + 62] = MAP_SLOPE_R45,
+    [12 * MAP_W + 63] = MAP_SLOPE_R45,
+    [11 * MAP_W + 64] = MAP_SLOPE_R45,
+    [10 * MAP_W + 65] = MAP_SLOPE_R45,
+    [9 * MAP_W + 66] = MAP_SLOPE_R45,
+    [8 * MAP_W + 67] = MAP_SLOPE_R45,
+    [7 * MAP_W + 68] = MAP_SLOPE_R45,
+    [6 * MAP_W + 69] = MAP_SLOPE_R45,
+    [5 * MAP_W + 70] = MAP_SLOPE_R45,
+    [4 * MAP_W + 71] = MAP_SLOPE_R45,
+    [3 * MAP_W + 72] = MAP_SLOPE_R45,
+    [2 * MAP_W + 73] = MAP_SLOPE_R45,
+    [1 * MAP_W + 74] = MAP_SLOPE_R45,
+    [1 * MAP_W + 75] = MAP_SLOPE_L45,
+    [2 * MAP_W + 76] = MAP_SLOPE_L45,
+    [3 * MAP_W + 77] = MAP_SLOPE_L45,
+    [4 * MAP_W + 78] = MAP_SLOPE_L45,
+    [5 * MAP_W + 79] = MAP_SLOPE_L45,
+    [6 * MAP_W + 80] = MAP_SLOPE_L45,
+    [7 * MAP_W + 81] = MAP_SLOPE_L45,
+    [8 * MAP_W + 82] = MAP_SLOPE_L45,
+    [9 * MAP_W + 83] = MAP_SLOPE_L45,
+    [10 * MAP_W + 84] = MAP_SLOPE_L45,
+    [11 * MAP_W + 85] = MAP_SLOPE_L45,
+    [12 * MAP_W + 86] = MAP_SLOPE_L45,
+    [13 * MAP_W + 87] = MAP_SLOPE_L45,
+    [13 * MAP_W + 89] = MAP_EXIT,
+    [13 * MAP_W + 45] = MAP_SLOPE_R45,
+    [13 * MAP_W + 46] = MAP_SLOPE_L45,
+    [13 * MAP_W + 47] = MAP_SLOPE_R2_0,
+    [13 * MAP_W + 48] = MAP_SLOPE_R2_1,
+    [13 * MAP_W + 49] = MAP_SLOPE_L2_1,
+    [13 * MAP_W + 50] = MAP_SLOPE_L2_0,
+    [13 * MAP_W + 51] = MAP_SLOPE_R3_0,
+    [13 * MAP_W + 52] = MAP_SLOPE_R3_1,
+    [13 * MAP_W + 53] = MAP_SLOPE_R3_2,
+    [13 * MAP_W + 54] = MAP_SLOPE_L3_2,
+    [13 * MAP_W + 55] = MAP_SLOPE_L3_1,
+    [13 * MAP_W + 56] = MAP_SLOPE_L3_0,
+    [13 * MAP_W + 58] = MAP_SLOPE_R45,
     [14 * MAP_W + 0] = MAP_SET,
     [14 * MAP_W + 1] = MAP_SET,
     [14 * MAP_W + 2] = MAP_SET,

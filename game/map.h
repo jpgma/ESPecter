@@ -17,6 +17,18 @@
 #define MAP_EXIT 4
 #define MAP_ONEWAY 5
 #define MAP_LIP 4
+#define MAP_SLOPE_R45 6
+#define MAP_SLOPE_L45 7
+#define MAP_SLOPE_R2_0 8
+#define MAP_SLOPE_R2_1 9
+#define MAP_SLOPE_L2_0 10
+#define MAP_SLOPE_L2_1 11
+#define MAP_SLOPE_R3_0 12
+#define MAP_SLOPE_R3_1 13
+#define MAP_SLOPE_R3_2 14
+#define MAP_SLOPE_L3_0 15
+#define MAP_SLOPE_L3_1 16
+#define MAP_SLOPE_L3_2 17
 
 #define MAP_FLOOR_ROW 14
 #define MAP_FLOOR_Y (MAP_FLOOR_ROW * MAP_TILE)
