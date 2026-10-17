@@ -197,6 +197,21 @@ static int slope_is(int kind)
     return kind >= MAP_SLOPE_R45 && kind <= MAP_SLOPE_L3_2;
 }
 
+/* [ceil_is] Devolve 1 se o kind é rampa de teto. */
+static int ceil_is(int kind)
+{
+    return kind >= MAP_CEIL_R45 && kind <= MAP_CEIL_L3_2;
+}
+
+/* [ceil_floor_kind] Devolve o kind de chão com a mesma subida. Kind sem teto devolve 0. */
+static int ceil_floor_kind(int kind)
+{
+    if (!ceil_is(kind)) {
+        return 0;
+    }
+    return kind - (MAP_CEIL_R45 - MAP_SLOPE_R45);
+}
+
 /* [slope_parts] Escreve a direção, o segmento e o divisor. Devolve 0 se o kind não for rampa. */
 static int slope_parts(int kind, int *dir, int *seg, int *den)
 {
@@ -303,6 +318,18 @@ static int slope_face(int kind)
     return dir;
 }
 
+/* [ceil_rise] Devolve a descida em subpixels desde o topo do tile. Kind sem teto devolve -1. */
+static int ceil_rise(int kind, int local_x)
+{
+    return slope_rise(ceil_floor_kind(kind), local_x);
+}
+
+/* [ceil_face] Devolve 1 na borda direita, -1 na esquerda, ou 0 se o teto não chega na base. */
+static int ceil_face(int kind)
+{
+    return slope_face(ceil_floor_kind(kind));
+}
+
 /* [apron_slope] Escreve o tile de rampa do apron em subpixels e o kind. Devolve 0 se o slot não for rampa. */
 static int apron_slope(int index, int *left, int *top, int *right, int *bottom, int *kind)
 {
@@ -312,6 +339,29 @@ static int apron_slope(int index, int *left, int *top, int *right, int *bottom, 
     int y;
 
     if (apron == 0 || apron_tx == 0 || index < 0 || index >= APRON_N || !slope_is(apron[index])) {
+        return 0;
+    }
+    dx = (index % 3) - 1;
+    dy = (index / 3) - 1;
+    x = (*apron_tx + dx) * MAP_TILE;
+    y = (*apron_ty + dy) * MAP_TILE;
+    *left = x << WORLD_SUB;
+    *top = y << WORLD_SUB;
+    *right = (x + MAP_TILE) << WORLD_SUB;
+    *bottom = (y + MAP_TILE) << WORLD_SUB;
+    *kind = apron[index];
+    return 1;
+}
+
+/* [apron_ceil] Escreve o tile de teto do apron em subpixels e o kind. Devolve 0 se o slot não for teto. */
+static int apron_ceil(int index, int *left, int *top, int *right, int *bottom, int *kind)
+{
+    int dx;
+    int dy;
+    int x;
+    int y;
+
+    if (apron == 0 || apron_tx == 0 || index < 0 || index >= APRON_N || !ceil_is(apron[index])) {
         return 0;
     }
     dx = (index % 3) - 1;
@@ -400,6 +450,62 @@ static int slope_support(int x, int bw, int *top)
     }
     *top = best;
     return 1;
+}
+
+/* [isqrt] Devolve a raiz inteira. n negativo devolve 0. */
+static int isqrt(int n)
+{
+    int x;
+    int y;
+
+    if (n <= 0) {
+        return 0;
+    }
+    x = n;
+    y = (x + 1) / 2;
+    while (y < x) {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    return x;
+}
+
+/* [slope_point] Escreve a superfície da rampa nesse x. Devolve 0 se não houver. */
+static int slope_point(int x, int *top)
+{
+    return slope_support(x, 1, top);
+}
+
+/* [slope_walk_cap] Devolve o teto de corrida. No chão, a descida abre pelo 1/cos. */
+static int slope_walk_cap(int dir)
+{
+    int x;
+    int bw;
+    int left_y;
+    int right_y;
+    int rise;
+    int hyp;
+
+    if (dir == 0 || !row_hit_floor[0]) {
+        return WORLD_RUN_MAX;
+    }
+    x = compose_sub(row_cell_x[0], row_x[0]);
+    bw = row_w[0] << WORLD_SUB;
+    if (bw <= 1 || !slope_point(x, &left_y) || !slope_point(x + bw - 1, &right_y)) {
+        return WORLD_RUN_MAX;
+    }
+    rise = right_y - left_y;
+    if ((dir > 0 && rise <= 0) || (dir < 0 && rise >= 0)) {
+        return WORLD_RUN_MAX;
+    }
+    if (rise < 0) {
+        rise = -rise;
+    }
+    hyp = isqrt((bw - 1) * (bw - 1) + rise * rise);
+    if (hyp <= 0) {
+        return WORLD_RUN_MAX;
+    }
+    return WORLD_RUN_MAX * hyp / (bw - 1);
 }
 
 /* [slope_wall] Encosta dest na face alta cruzada de fora, se os pés ficam abaixo da superfície. hit recebe -1 ou 1 se a face parar. */
@@ -606,6 +712,231 @@ static void slope_embed_up(int x, int bw, int y, int bh, int *found, int *pen_be
     }
 }
 
+/* [ceil_tile_low] Escreve a superfície mais baixa deste tile sobre os cantos que caem nele. Devolve 0 se nenhum cai. */
+static int ceil_tile_low(int kind, int left, int top, int x, int bw, int *low)
+{
+    int tile;
+    int n;
+    int corner;
+    int local;
+    int rise;
+    int surface;
+    int best;
+    int found;
+
+    tile = MAP_TILE << WORLD_SUB;
+    found = 0;
+    best = 0;
+    for (n = 0; n < 2; n++) {
+        if (n == 0) {
+            corner = x;
+        } else {
+            corner = x + bw - 1;
+        }
+        if (corner < left || corner >= left + tile) {
+            continue;
+        }
+        local = corner - left;
+        rise = ceil_rise(kind, local);
+        if (rise < 0) {
+            continue;
+        }
+        surface = top + rise;
+        if (!found || surface > best) {
+            found = 1;
+            best = surface;
+        }
+    }
+    if (!found) {
+        return 0;
+    }
+    *low = best;
+    return 1;
+}
+
+/* [ceil_cover] Escreve o y mais baixo do teto sobre os dois cantos. Devolve 0 se não houver. */
+static int ceil_cover(int x, int bw, int *low)
+{
+    int i;
+    int left;
+    int top;
+    int right;
+    int bottom;
+    int kind;
+    int surface;
+    int best;
+    int found;
+
+    found = 0;
+    best = 0;
+    for (i = 0; i < APRON_N; i++) {
+        if (!apron_ceil(i, &left, &top, &right, &bottom, &kind)) {
+            continue;
+        }
+        if (!ceil_tile_low(kind, left, top, x, bw, &surface)) {
+            continue;
+        }
+        if (!found || surface > best) {
+            found = 1;
+            best = surface;
+        }
+    }
+    if (!found) {
+        return 0;
+    }
+    *low = best;
+    return 1;
+}
+
+/* [ceil_press] Desce a cabeça se a entrada cabe no dx. Devolve 1 se empurrou. */
+static int ceil_press(int x, int y, int bw, int dx)
+{
+    int low;
+    int limit;
+
+    if (bw <= 0 || !ceil_cover(x, bw, &low)) {
+        return 0;
+    }
+    if (y >= low) {
+        return 0;
+    }
+    limit = dx + (1 << WORLD_SUB);
+    if (low - y > limit) {
+        return 0;
+    }
+    split_sub(low, &row_cell_y[0], &row_y[0]);
+    return 1;
+}
+
+/* [ceil_wall] Encosta dest na face grossa cruzada de fora, se a cabeça fica acima da superfície. hit recebe -1 ou 1 se a face parar. */
+static int ceil_wall(int x0, int dest, int y, int bw, int bh, int *hit)
+{
+    int best;
+    int side;
+    int i;
+    int left;
+    int top;
+    int right;
+    int bottom;
+    int kind;
+    int face;
+    int low;
+    int stop;
+
+    best = dest;
+    side = 0;
+    if (ceil_cover(dest, bw, &low) && y >= low) {
+        return dest;
+    }
+    for (i = 0; i < APRON_N; i++) {
+        if (!apron_ceil(i, &left, &top, &right, &bottom, &kind)) {
+            continue;
+        }
+        face = ceil_face(kind);
+        if (face == 0) {
+            continue;
+        }
+        if (!range_overlaps(y, y + bh, top, bottom)) {
+            continue;
+        }
+        if (y >= bottom) {
+            continue;
+        }
+        if (face > 0) {
+            if (x0 >= right && dest < right && right > best) {
+                best = right;
+                side = -1;
+            }
+        } else {
+            stop = left - bw;
+            if (x0 + bw <= left && dest + bw > left && stop < best) {
+                best = stop;
+                side = 1;
+            }
+        }
+    }
+    if (side != 0) {
+        *hit = side;
+    }
+    return best;
+}
+
+/* [ceil_stop] Para a subida na superfície do teto cruzada neste x. */
+static void ceil_stop(int x, int bw, int y0, int dest, int *best, int *hit)
+{
+    int i;
+    int left;
+    int top;
+    int right;
+    int bottom;
+    int kind;
+    int surface;
+
+    if (dest >= y0) {
+        return;
+    }
+    for (i = 0; i < APRON_N; i++) {
+        if (!apron_ceil(i, &left, &top, &right, &bottom, &kind)) {
+            continue;
+        }
+        if (!ceil_tile_low(kind, left, top, x, bw, &surface)) {
+            continue;
+        }
+        if (y0 >= surface && dest < surface && surface > *best) {
+            *best = surface;
+            *hit = -1;
+        }
+    }
+}
+
+/* [ceil_embed_down] Empurra y para a superfície do teto se a cabeça cruza o sólido. A saída é só para baixo. */
+static void ceil_embed_down(int x, int bw, int y, int bh, int *found, int *pen_best, int *out_best, int *side_best)
+{
+    int i;
+    int left;
+    int top;
+    int right;
+    int bottom;
+    int kind;
+    int surface;
+    int pen;
+    int out;
+    int best_surface;
+    int any;
+
+    any = 0;
+    best_surface = 0;
+    for (i = 0; i < APRON_N; i++) {
+        if (!apron_ceil(i, &left, &top, &right, &bottom, &kind)) {
+            continue;
+        }
+        if (y >= bottom || y + bh <= top) {
+            continue;
+        }
+        if (!ceil_tile_low(kind, left, top, x, bw, &surface)) {
+            continue;
+        }
+        if (y >= surface) {
+            continue;
+        }
+        if (!any || surface > best_surface) {
+            any = 1;
+            best_surface = surface;
+        }
+    }
+    if (!any) {
+        return;
+    }
+    pen = best_surface - y;
+    out = best_surface;
+    if (!*found || pen < *pen_best) {
+        *found = 1;
+        *pen_best = pen;
+        *out_best = out;
+        *side_best = -1;
+    }
+}
+
 /* [shuttle_box] Escreve o AABB do shuttle em subpixels do mundo. */
 static void shuttle_box(int *left, int *top, int *right, int *bottom)
 {
@@ -670,7 +1001,7 @@ static void embed_candidate(int horizontal, int fixed, int fixed_size, int move_
     }
 }
 
-/* [body_embed] Tira best do set ou do shuttle mais raso neste eixo. No eixo y, a rampa só empurra para a superfície. hit fica se já estiver fora. */
+/* [body_embed] Tira best do set ou do shuttle mais raso neste eixo. No eixo y, a rampa de chão só empurra para cima e a de teto só para baixo. hit fica se já estiver fora. */
 static void body_embed(int horizontal, int fixed, int fixed_size, int move_size, int *best, int *hit)
 {
     int pass;
@@ -703,6 +1034,7 @@ static void body_embed(int horizontal, int fixed, int fixed_size, int move_size,
         }
         if (!horizontal) {
             slope_embed_up(fixed, fixed_size, *best, move_size, &found, &pen_best, &out_best, &side_best);
+            ceil_embed_down(fixed, fixed_size, *best, move_size, &found, &pen_best, &out_best, &side_best);
         }
         if (!found) {
             return;
@@ -718,29 +1050,54 @@ static int body_latched(void)
     return row_wall[0] != 0;
 }
 
-/* [body_run] Acelera ou atrita vx. O latch e o sangramento acima do teto de corrida ignoram o eixo. */
+/* [body_run] Acelera ou atrita vx até o teto. Na descida [slope_walk_cap] abre o teto. O latch e o sangramento acima do teto ignoram o eixo. */
 static void body_run(const actions *input)
 {
     int vx;
+    int cap;
+    int dir;
 
     if (body_latched()) {
         return;
     }
-    vx = row_vx[0];
-    if (vx > WORLD_RUN_MAX) {
-        vx -= WORLD_RUN_ACCEL;
-        if (vx < WORLD_RUN_MAX) {
-            vx = WORLD_RUN_MAX;
+    dir = 0;
+    if (input->move_left && !input->move_right) {
+        dir = -1;
+    } else if (input->move_right && !input->move_left) {
+        dir = 1;
+    }
+    cap = WORLD_RUN_MAX;
+    if (row_hit_floor[0] && row_vx[0] != 0) {
+        int along;
+
+        along = slope_walk_cap(row_vx[0] > 0 ? 1 : -1);
+        if (along > cap) {
+            cap = along;
         }
-    } else if (vx < -WORLD_RUN_MAX) {
+    }
+    if (row_hit_floor[0] && dir != 0) {
+        int aimed;
+
+        aimed = slope_walk_cap(dir);
+        if (aimed > cap) {
+            cap = aimed;
+        }
+    }
+    vx = row_vx[0];
+    if (vx > cap) {
+        vx -= WORLD_RUN_ACCEL;
+        if (vx < cap) {
+            vx = cap;
+        }
+    } else if (vx < -cap) {
         vx += WORLD_RUN_ACCEL;
-        if (vx > -WORLD_RUN_MAX) {
-            vx = -WORLD_RUN_MAX;
+        if (vx > -cap) {
+            vx = -cap;
         }
     } else {
-        if (input->move_left && !input->move_right) {
+        if (dir < 0) {
             vx -= WORLD_RUN_ACCEL;
-        } else if (input->move_right && !input->move_left) {
+        } else if (dir > 0) {
             vx += WORLD_RUN_ACCEL;
         } else if (vx > 0) {
             vx -= WORLD_RUN_ACCEL;
@@ -753,10 +1110,10 @@ static void body_run(const actions *input)
                 vx = 0;
             }
         }
-        if (vx > WORLD_RUN_MAX) {
-            vx = WORLD_RUN_MAX;
-        } else if (vx < -WORLD_RUN_MAX) {
-            vx = -WORLD_RUN_MAX;
+        if (vx > cap) {
+            vx = cap;
+        } else if (vx < -cap) {
+            vx = -cap;
         }
     }
     row_vx[0] = vx;
@@ -843,7 +1200,7 @@ static int body_stop_x(int x0, int dest, int y, int bw, int bh, int *hit)
     return best;
 }
 
-/* [body_stop_y] Devolve o y na primeira face cruzada. O one-way só para a queda vinda de cima, e skip ignora esse topo. A rampa para a queda na superfície e a subida na base do tile. O shuttle entra como caixa, e o empate do chão fica com ele. hit recebe -1 teto, 1 chão ou 0. */
+/* [body_stop_y] Devolve o y na primeira face cruzada. O one-way só para a queda vinda de cima, e skip ignora esse topo. A rampa de chão para a queda na superfície e a subida na base do tile. A rampa de teto para a subida na superfície. O shuttle entra como caixa, e o empate do chão fica com ele. hit recebe -1 teto, 1 chão ou 0. */
 static int body_stop_y(int y0, int dest, int x, int bw, int bh, int skip, int *hit)
 {
     int best;
@@ -894,6 +1251,7 @@ static int body_stop_y(int y0, int dest, int x, int bw, int bh, int skip, int *h
     }
     slope_floor(x, bw, y0, dest, bh, &best, hit);
     slope_ceil(x, bw, y0, dest, &best, hit);
+    ceil_stop(x, bw, y0, dest, &best, hit);
     if (shuttle_x != 0) {
         shuttle_box(&left, &top, &right, &bottom);
         if (range_overlaps(x, x + bw, left, right)) {
@@ -916,7 +1274,7 @@ static int body_stop_y(int y0, int dest, int x, int bw, int bh, int skip, int *h
     return best;
 }
 
-/* [body_on_latch] Devolve 1 se um subpixel contra o muro, a face alta da rampa ou o shuttle ainda cruza uma face. */
+/* [body_on_latch] Devolve 1 se um subpixel contra o muro, a face alta da rampa, a face grossa do teto ou o shuttle ainda cruza uma face. */
 static int body_on_latch(void)
 {
     int side;
@@ -974,6 +1332,25 @@ static int body_on_latch(void)
             return 1;
         }
     }
+    for (i = 0; i < APRON_N; i++) {
+        if (!apron_ceil(i, &left, &top, &right, &bottom, &kind)) {
+            continue;
+        }
+        face = ceil_face(kind);
+        if (side < 0 && face != 1) {
+            continue;
+        }
+        if (side > 0 && face != -1) {
+            continue;
+        }
+        if (y >= bottom) {
+            continue;
+        }
+        if (range_overlaps(probe, probe + bw, left, right) &&
+            range_overlaps(y, y + bh, top, bottom)) {
+            return 1;
+        }
+    }
     if (shuttle_x != 0) {
         shuttle_box(&left, &top, &right, &bottom);
         if (range_overlaps(probe, probe + bw, left, right) &&
@@ -984,25 +1361,7 @@ static int body_on_latch(void)
     return 0;
 }
 
-/* [isqrt] Devolve a raiz inteira. n negativo devolve 0. */
-static int isqrt(int n)
-{
-    int x;
-    int y;
-
-    if (n <= 0) {
-        return 0;
-    }
-    x = n;
-    y = (x + 1) / 2;
-    while (y < x) {
-        x = y;
-        y = (x + n / x) / 2;
-    }
-    return x;
-}
-
-/* [slope_grade] Na subida corta vx no teto vezes o cos. Na descida soma a gravidade vezes sin*cos até o teto vezes 1/cos. */
+/* [slope_grade] Corta vx no teto do passo. Subida usa o cos e descida o 1/cos. Não soma velocidade. */
 static void slope_grade(int x0, int x, int bw)
 {
     int before;
@@ -1011,7 +1370,6 @@ static void slope_grade(int x0, int x, int bw)
     int run;
     int hyp;
     int cap;
-    int push;
     int vx;
 
     if (bw <= 0 || !slope_support(x0, bw, &before) || !slope_support(x, bw, &after)) {
@@ -1035,40 +1393,29 @@ static void slope_grade(int x0, int x, int bw)
     if (hyp <= 0) {
         return;
     }
-    vx = row_vx[0];
     if (after < before) {
         cap = WORLD_RUN_MAX * run / hyp;
-        if (vx > cap) {
-            row_vx[0] = cap;
-        } else if (vx < -cap) {
-            row_vx[0] = -cap;
-        }
-        return;
-    }
-    cap = WORLD_RUN_MAX * hyp / run;
-    push = WORLD_GRAVITY_FALL * drop / hyp * run / hyp;
-    if (x >= x0) {
-        vx += push;
-        if (vx > cap) {
-            vx = cap;
-        }
     } else {
-        vx -= push;
-        if (vx < -cap) {
-            vx = -cap;
-        }
+        cap = WORLD_RUN_MAX * hyp / run;
     }
-    row_vx[0] = vx;
+    vx = row_vx[0];
+    if (vx > cap) {
+        row_vx[0] = cap;
+    } else if (vx < -cap) {
+        row_vx[0] = -cap;
+    }
 }
 
-/* [body_solve_x] Soma vx, projeta nas faces verticais, inclusive o shuttle, grava o latch e separa a célula. Se a subida da rampa cabe no dx, os pés sobem. [slope_grade] corta vx na subida e acelera na descida. Senão a face alta para se os pés ficam abaixo da superfície. O chão anterior desce até o teto de queda. */
+/* [body_solve_x] Soma vx, projeta nas faces verticais, inclusive o shuttle, grava o latch e separa a célula. Se a subida da rampa cabe no dx, os pés sobem. [slope_grade] corta vx no teto do grau. Senão a face alta para se os pés ficam abaixo da superfície. O chão anterior desce até o teto de queda. Se a cabeça entra no teto dentro do dx, ela desce e vx fica. Senão a face grossa para. */
 static void body_solve_x(const actions *input)
 {
     int x0;
     int y0;
+    int y1;
     int bw;
     int bh;
     int hit;
+    int ceil_hit;
     int x;
     int dx;
 
@@ -1100,6 +1447,29 @@ static void body_solve_x(const actions *input)
             }
         }
         slope_snap(x, y0, bw, bh);
+    }
+    y1 = compose_sub(row_cell_y[0], row_y[0]);
+    dx = x - x0;
+    if (dx < 0) {
+        dx = -dx;
+    }
+    ceil_hit = 0;
+    if (!ceil_press(x, y1, bw, dx)) {
+        x = ceil_wall(x0, x, y1, bw, bh, &ceil_hit);
+        if (ceil_hit != 0) {
+            row_vx[0] = 0;
+            if (ceil_hit < 0) {
+                row_hit_left[0] = 1;
+                if (!input->move_down) {
+                    row_wall[0] = -1;
+                }
+            } else {
+                row_hit_right[0] = 1;
+                if (!input->move_down) {
+                    row_wall[0] = 1;
+                }
+            }
+        }
     }
     slope_grade(x0, x, bw);
     split_sub(x, &row_cell_x[0], &row_x[0]);
@@ -1265,7 +1635,7 @@ static void disk_solve(const actions *input)
     }
 }
 
-/* [body_solve_y] Soma vy, projeta nas faces, inclusive a rampa e o shuttle, separa a célula e solta o latch no chão ou na saída do muro. move_down ignora o topo one-way e não a rampa. O chão do shuttle grava o rider. Depois [disk_solve] empurra o disco. O chão chama [cam_note_ground]. */
+/* [body_solve_y] Soma vy, projeta nas faces, inclusive a rampa de chão, a de teto e o shuttle, separa a célula e solta o latch no chão ou na saída do muro. A subida no teto zera vy e deixa o latch. move_down ignora o topo one-way e não a rampa. O chão do shuttle grava o rider. Depois [disk_solve] empurra o disco. O chão chama [cam_note_ground]. */
 static void body_solve_y(const actions *input)
 {
     int x0;
@@ -2042,13 +2412,13 @@ void world_camera(int *x, int *y)
     *y = *cam_y >> WORLD_SUB;
 }
 
-/* [solid_box] Escreve o retângulo do tile set, os 4 px do topo one-way, ou o tile inteiro da rampa, e o kind. Devolve 0 se o kind não entra na lista. */
+/* [solid_box] Escreve o retângulo do tile set, os 4 px do topo one-way, ou o tile inteiro da rampa de chão ou de teto, e o kind. Devolve 0 se o kind não entra na lista. */
 static int solid_box(int tx, int ty, int *x, int *y, int *w, int *h, int *kind)
 {
     int tile;
 
     tile = map_at(tx, ty);
-    if (tile != MAP_SET && tile != MAP_ONEWAY && !slope_is(tile)) {
+    if (tile != MAP_SET && tile != MAP_ONEWAY && !slope_is(tile) && !ceil_is(tile)) {
         return 0;
     }
     *x = tx * MAP_TILE;
@@ -2062,7 +2432,7 @@ static int solid_box(int tx, int ty, int *x, int *y, int *w, int *h, int *kind)
     return 1;
 }
 
-/* [set_crosses] Devolve 1 se o tile set, a faixa one-way ou a rampa cruza a View em camx, camy. */
+/* [set_crosses] Devolve 1 se o tile set, a faixa one-way, a rampa de chão ou a de teto cruza a View em camx, camy. */
 static int set_crosses(int tx, int ty, int camx, int camy)
 {
     int x;
@@ -2078,7 +2448,7 @@ static int set_crosses(int tx, int ty, int camx, int camy)
            range_overlaps(y, y + h, camy, camy + WORLD_VIEW);
 }
 
-/* [world_solid_count] Devolve quantos tiles set, one-way ou rampa cruzam a View. */
+/* [world_solid_count] Devolve quantos tiles set, one-way, rampa de chão ou rampa de teto cruzam a View. */
 int world_solid_count(void)
 {
     int camx;
@@ -2115,7 +2485,7 @@ int world_solid_count(void)
     return count;
 }
 
-/* [world_solid_rect] Escreve o tile set, a faixa one-way ou o tile da rampa que cruza a View, e o kind. Fora da contagem, zera a saída. */
+/* [world_solid_rect] Escreve o tile set, a faixa one-way ou o tile da rampa de chão ou de teto que cruza a View, e o kind. Fora da contagem, zera a saída. */
 void world_solid_rect(int index, int *x, int *y, int *w, int *h, int *kind)
 {
     int camx;
@@ -2174,7 +2544,7 @@ int world_slope(int kind)
     return slope_is(kind);
 }
 
-/* [world_slope_row] Escreve o x local e a largura da fileira sólida. Devolve 0 se o kind não for rampa ou a fileira for vazia. */
+/* [world_slope_row] Escreve o x local e a largura da fileira sólida. Devolve 0 se o kind não for rampa de chão ou a fileira for vazia. */
 int world_slope_row(int kind, int row, int *x, int *w)
 {
     int dir;
@@ -2207,6 +2577,60 @@ int world_slope_row(int kind, int row, int *x, int *w)
             sample = lx << WORLD_SUB;
         }
         rise = slope_rise(kind, sample);
+        if (rise > need) {
+            if (run == 0) {
+                *x = lx;
+            }
+            run += 1;
+        } else if (run > 0) {
+            break;
+        }
+    }
+    *w = run;
+    return run > 0;
+}
+
+/* [world_ceil] Devolve 1 se o kind é rampa de teto. */
+int world_ceil(int kind)
+{
+    return ceil_is(kind);
+}
+
+/* [world_ceil_row] Escreve o x local e a largura da fileira sólida. Devolve 0 se o kind não for rampa de teto ou a fileira for vazia. */
+int world_ceil_row(int kind, int row, int *x, int *w)
+{
+    int dir;
+    int seg;
+    int den;
+    int need;
+    int tile;
+    int lx;
+    int sample;
+    int rise;
+    int run;
+    int floor;
+
+    *x = 0;
+    *w = 0;
+    floor = ceil_floor_kind(kind);
+    if (!slope_parts(floor, &dir, &seg, &den) || row < 0 || row >= MAP_TILE) {
+        return 0;
+    }
+    (void)seg;
+    (void)den;
+    need = row << WORLD_SUB;
+    tile = MAP_TILE << WORLD_SUB;
+    run = 0;
+    for (lx = 0; lx < MAP_TILE; lx++) {
+        if (dir > 0) {
+            sample = ((lx + 1) << WORLD_SUB) - 1;
+            if (sample > tile) {
+                sample = tile;
+            }
+        } else {
+            sample = lx << WORLD_SUB;
+        }
+        rise = ceil_rise(kind, sample);
         if (rise > need) {
             if (run == 0) {
                 *x = lx;

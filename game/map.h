@@ -29,6 +29,18 @@
 #define MAP_SLOPE_L3_0 15
 #define MAP_SLOPE_L3_1 16
 #define MAP_SLOPE_L3_2 17
+#define MAP_CEIL_R45 18
+#define MAP_CEIL_L45 19
+#define MAP_CEIL_R2_0 20
+#define MAP_CEIL_R2_1 21
+#define MAP_CEIL_L2_0 22
+#define MAP_CEIL_L2_1 23
+#define MAP_CEIL_R3_0 24
+#define MAP_CEIL_R3_1 25
+#define MAP_CEIL_R3_2 26
+#define MAP_CEIL_L3_0 27
+#define MAP_CEIL_L3_1 28
+#define MAP_CEIL_L3_2 29
 
 #define MAP_FLOOR_ROW 14
 #define MAP_FLOOR_Y (MAP_FLOOR_ROW * MAP_TILE)

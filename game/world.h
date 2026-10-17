@@ -25,14 +25,18 @@ void world_rect(int *x, int *y, int *w, int *h);
 void world_body_pose(int *clip, int *frame, int *face);
 /* [world_camera] Escreve a origem da View em pixels do mundo. */
 void world_camera(int *x, int *y);
-/* [world_solid_count] Devolve quantos tiles set, one-way ou rampa cruzam a View. */
+/* [world_solid_count] Devolve quantos tiles set, one-way, rampa de chão ou rampa de teto cruzam a View. */
 int world_solid_count(void);
-/* [world_solid_rect] Escreve o tile set, a faixa one-way ou o tile da rampa que cruza a View, e o kind. Fora da contagem, zera a saída. */
+/* [world_solid_rect] Escreve o tile set, a faixa one-way ou o tile da rampa de chão ou de teto que cruza a View, e o kind. Fora da contagem, zera a saída. */
 void world_solid_rect(int index, int *x, int *y, int *w, int *h, int *kind);
 /* [world_slope] Devolve 1 se o kind é rampa de chão. */
 int world_slope(int kind);
-/* [world_slope_row] Escreve o x local e a largura da fileira sólida. Devolve 0 se o kind não for rampa ou a fileira for vazia. */
+/* [world_slope_row] Escreve o x local e a largura da fileira sólida. Devolve 0 se o kind não for rampa de chão ou a fileira for vazia. */
 int world_slope_row(int kind, int row, int *x, int *w);
+/* [world_ceil] Devolve 1 se o kind é rampa de teto. */
+int world_ceil(int kind);
+/* [world_ceil_row] Escreve o x local e a largura da fileira sólida. Devolve 0 se o kind não for rampa de teto ou a fileira for vazia. */
+int world_ceil_row(int kind, int row, int *x, int *w);
 /* [world_spike_rect] Escreve o spike em pixels do mundo. */
 void world_spike_rect(int *x, int *y, int *w, int *h);
 /* [world_checkpoint_rect] Escreve o volume do checkpoint em pixels do mundo. */

@@ -3,7 +3,8 @@
 /* Célula 0: chão na fileira 14, muros nas colunas 5 e 9, plataformas nas laterais.
    A fileira 11, colunas 0 a 3, é one-way.
    Célula 1: fosso de 3 tiles, depois o chão, um spike e um checkpoint.
-   Célula 2: vão do shuttle. Célula 3: onda de rampas na fileira 13, sobre o chão.
+   Célula 2: vão do shuttle. No fim, fileira 8 é tampa e fileira 9 é a onda no teto, colunas 33 a 44.
+   Célula 3: onda de rampas na fileira 13, sobre o chão.
    Da coluna 62, fileira 13, uma 45° sobe um tile por coluna até a fileira 1.
    Da coluna 75, fileira 1, uma 45° desce até a fileira 13.
    O disco sobe na coluna 96. A saída fica na coluna 104.
@@ -81,6 +82,30 @@ static const uint8_t strip[MAP_H * MAP_W] = {
     [12 * MAP_W + 86] = MAP_SLOPE_L45,
     [13 * MAP_W + 87] = MAP_SLOPE_L45,
     [13 * MAP_W + 104] = MAP_EXIT,
+    [8 * MAP_W + 33] = MAP_SET,
+    [8 * MAP_W + 34] = MAP_SET,
+    [8 * MAP_W + 35] = MAP_SET,
+    [8 * MAP_W + 36] = MAP_SET,
+    [8 * MAP_W + 37] = MAP_SET,
+    [8 * MAP_W + 38] = MAP_SET,
+    [8 * MAP_W + 39] = MAP_SET,
+    [8 * MAP_W + 40] = MAP_SET,
+    [8 * MAP_W + 41] = MAP_SET,
+    [8 * MAP_W + 42] = MAP_SET,
+    [8 * MAP_W + 43] = MAP_SET,
+    [8 * MAP_W + 44] = MAP_SET,
+    [10 * MAP_W + 33] = MAP_CEIL_R45,
+    [10 * MAP_W + 34] = MAP_CEIL_L45,
+    [10 * MAP_W + 35] = MAP_CEIL_R2_0,
+    [10 * MAP_W + 36] = MAP_CEIL_R2_1,
+    [10 * MAP_W + 37] = MAP_CEIL_L2_1,
+    [10 * MAP_W + 38] = MAP_CEIL_L2_0,
+    [10 * MAP_W + 39] = MAP_CEIL_R3_0,
+    [10 * MAP_W + 40] = MAP_CEIL_R3_1,
+    [10 * MAP_W + 41] = MAP_CEIL_R3_2,
+    [10 * MAP_W + 42] = MAP_CEIL_L3_2,
+    [10 * MAP_W + 43] = MAP_CEIL_L3_1,
+    [10 * MAP_W + 44] = MAP_CEIL_L3_0,
     [13 * MAP_W + 45] = MAP_SLOPE_R45,
     [13 * MAP_W + 46] = MAP_SLOPE_L45,
     [13 * MAP_W + 47] = MAP_SLOPE_R2_0,

@@ -271,7 +271,7 @@ void draw_disk(pixelroot32::graphics::Renderer &renderer, int cam_x, int cam_y, 
     }
 }
 
-/* [draw_slope] Pinta as fileiras sólidas da rampa em preto. O retângulo publicado continua o tile inteiro. */
+/* [draw_slope] Pinta as fileiras sólidas da rampa de chão ou de teto em preto. O retângulo publicado continua o tile inteiro. */
 void draw_slope(pixelroot32::graphics::Renderer &renderer, int cam_x, int cam_y, int tile_x, int tile_y, int kind)
 {
     int row;
@@ -281,9 +281,15 @@ void draw_slope(pixelroot32::graphics::Renderer &renderer, int cam_x, int cam_y,
     int sy;
     int sw;
     int sh;
+    int ceiling;
 
+    ceiling = world_ceil(kind);
     for (row = 0; row < MAP_TILE; row++) {
-        if (!world_slope_row(kind, row, &lx, &lw)) {
+        if (ceiling) {
+            if (!world_ceil_row(kind, row, &lx, &lw)) {
+                continue;
+            }
+        } else if (!world_slope_row(kind, row, &lx, &lw)) {
             continue;
         }
         sx = tile_x + lx;
@@ -824,7 +830,7 @@ public:
             sy = g_shown->solids[i].y;
             sw = g_shown->solids[i].w;
             sh = g_shown->solids[i].h;
-            if (world_slope(g_shown->solid_kind[i])) {
+            if (world_slope(g_shown->solid_kind[i]) || world_ceil(g_shown->solid_kind[i])) {
                 draw_slope(renderer, cam_x, cam_y, sx, sy, g_shown->solid_kind[i]);
             } else if (clip_view(cam_x, cam_y, &sx, &sy, &sw, &sh)) {
                 renderer.drawFilledRectangle(sx, sy, sw, sh, pixelroot32::graphics::Color::Black);
