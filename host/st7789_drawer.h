@@ -63,6 +63,9 @@ public:
     void drawPixel(int x, int y, uint16_t color) override;
     /* [st7789_drawer::drawFilledRectangle] Preenche um rectangle com um índice da palette. Uma linha cheia usa memset. Row limpa não muda. */
     void drawFilledRectangle(int x, int y, int w, int h, uint16_t color) override;
+    /* [st7789_drawer::blit_indices] Copia índices 8bpp para a View. Índice 0 não pinta. Row limpa não muda. */
+    void blit_indices(int dst_x, int dst_y, int src_x, int src_y, int w, int h, int stride,
+                      const uint8_t *src);
 
 private:
     /* [st7789_drawer::index_for] Devolve o índice dessa RGB565 em palette_rgb565. Se não achar, devolve 0. */

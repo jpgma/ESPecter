@@ -4,6 +4,7 @@
 #include "arena.h"
 #include "body_sheet.h"
 #include "palette.h"
+#include "tile_sheet.h"
 #include "world.h"
 
 extern "C" {
@@ -271,35 +272,99 @@ void draw_disk(pixelroot32::graphics::Renderer &renderer, int cam_x, int cam_y, 
     }
 }
 
-/* [draw_slope] Pinta as fileiras sólidas da rampa de chão ou de teto em preto. O retângulo publicado continua o tile inteiro. */
-void draw_slope(pixelroot32::graphics::Renderer &renderer, int cam_x, int cam_y, int tile_x, int tile_y, int kind)
+/* [blit_tile_indices] Copia o recorte 8bpp para a View. No device usa [st7789_drawer::blit_indices]; no PC escreve RGB565. */
+void blit_tile_indices(pixelroot32::graphics::Renderer &renderer, int dst_x, int dst_y, int src_x, int src_y, int w,
+                       int h, const uint8_t *src)
 {
+#ifdef PLATFORM_NATIVE
+    uint16_t *fb;
     int row;
-    int lx;
-    int lw;
+    int col;
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+    int sx0;
+    int sy0;
+
+    if (src == nullptr || w <= 0 || h <= 0) {
+        return;
+    }
+    fb = renderer.getDrawSurface().getPixelBuffer();
+    if (fb == nullptr) {
+        return;
+    }
+    x0 = dst_x;
+    y0 = dst_y;
+    x1 = dst_x + w;
+    y1 = dst_y + h;
+    sx0 = src_x;
+    sy0 = src_y;
+    if (x0 < 0) {
+        sx0 -= x0;
+        x0 = 0;
+    }
+    if (y0 < 0) {
+        sy0 -= y0;
+        y0 = 0;
+    }
+    if (x1 > WORLD_VIEW) {
+        x1 = WORLD_VIEW;
+    }
+    if (y1 > WORLD_VIEW) {
+        y1 = WORLD_VIEW;
+    }
+    if (x1 <= x0 || y1 <= y0) {
+        return;
+    }
+    for (row = y0; row < y1; row++) {
+        const uint8_t *src_row = src + (sy0 + (row - y0)) * TILE_SHEET_W + sx0;
+        uint16_t *dst = fb + row * WORLD_VIEW + x0;
+
+        for (col = 0; col < x1 - x0; col++) {
+            uint8_t index = src_row[col];
+
+            if (index != 0) {
+                dst[col] = palette_rgb565[index];
+            }
+        }
+    }
+#else
+    auto &drawer = static_cast<especter::st7789_drawer &>(renderer.getDrawSurface());
+
+    drawer.blit_indices(dst_x, dst_y, src_x, src_y, w, h, TILE_SHEET_W, src);
+#endif
+}
+
+/* [draw_tile_kind] Pinta o sprite do kind no retângulo publicado, recortado à View. Índice 0 deixa o chão. */
+void draw_tile_kind(pixelroot32::graphics::Renderer &renderer, int cam_x, int cam_y, int tile_x, int tile_y, int w,
+                    int h, int kind)
+{
+    const uint8_t *px;
     int sx;
     int sy;
     int sw;
     int sh;
-    int ceiling;
+    int src_x;
+    int src_y;
 
-    ceiling = world_ceil(kind);
-    for (row = 0; row < MAP_TILE; row++) {
-        if (ceiling) {
-            if (!world_ceil_row(kind, row, &lx, &lw)) {
-                continue;
-            }
-        } else if (!world_slope_row(kind, row, &lx, &lw)) {
-            continue;
-        }
-        sx = tile_x + lx;
-        sy = tile_y + row;
-        sw = lw;
-        sh = 1;
-        if (clip_view(cam_x, cam_y, &sx, &sy, &sw, &sh)) {
-            renderer.drawFilledRectangle(sx, sy, sw, sh, pixelroot32::graphics::Color::Black);
-        }
+    px = tile_sheet_at(kind);
+    if (px == nullptr || w <= 0 || h <= 0) {
+        return;
     }
+    sx = tile_x;
+    sy = tile_y;
+    sw = w;
+    sh = h;
+    if (!clip_view(cam_x, cam_y, &sx, &sy, &sw, &sh)) {
+        return;
+    }
+    src_x = sx - tile_x;
+    src_y = sy - tile_y;
+    if (src_x < 0 || src_y < 0 || src_x + sw > TILE_SHEET_W || src_y + sh > TILE_SHEET_H) {
+        return;
+    }
+    blit_tile_indices(renderer, sx - cam_x, sy - cam_y, src_x, src_y, sw, sh, px);
 }
 
 /* [draw_world_fill] Pinta o AABB de mundo se [clip_view] deixar área. */
@@ -759,7 +824,7 @@ public:
 #endif
     }
 
-    /* [rect_scene::draw] Pinta a view de [load_view]: ground, sólidos, shuttle, tampão, spike, checkpoint, saída e corpo no offset da câmera. No device só as rows de [mark_present_rows]. Com o debug, o wireframe das células, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No PC, com o PWR apagado, pinta preto e volta. */
+    /* [rect_scene::draw] Pinta a view de [load_view]: ground, tiles da sheet, shuttle, tampão, spike, checkpoint, saída e corpo no offset da câmera. No device só as rows de [mark_present_rows]. Com o debug, o wireframe das células, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No PC, com o PWR apagado, pinta preto e volta. */
     void draw(pixelroot32::graphics::Renderer &renderer) override
     {
         int cam_x;
@@ -821,20 +886,8 @@ public:
         renderer.setDisplayOffset(-cam_x, -cam_y);
         count = g_shown->solid_count;
         for (i = 0; i < count; i++) {
-            int sx;
-            int sy;
-            int sw;
-            int sh;
-
-            sx = g_shown->solids[i].x;
-            sy = g_shown->solids[i].y;
-            sw = g_shown->solids[i].w;
-            sh = g_shown->solids[i].h;
-            if (world_slope(g_shown->solid_kind[i]) || world_ceil(g_shown->solid_kind[i])) {
-                draw_slope(renderer, cam_x, cam_y, sx, sy, g_shown->solid_kind[i]);
-            } else if (clip_view(cam_x, cam_y, &sx, &sy, &sw, &sh)) {
-                renderer.drawFilledRectangle(sx, sy, sw, sh, pixelroot32::graphics::Color::Black);
-            }
+            draw_tile_kind(renderer, cam_x, cam_y, g_shown->solids[i].x, g_shown->solids[i].y, g_shown->solids[i].w,
+                           g_shown->solids[i].h, g_shown->solid_kind[i]);
         }
         mx = g_shown->shuttle.x;
         my = g_shown->shuttle.y;
@@ -963,6 +1016,7 @@ void log_memory(void)
     log_bytes("psram spare", arena_capacity() - arena_offset());
     log_bytes("palette", sizeof palette_rgb565);
     log_bytes("body", sheet_bytes());
+    log_bytes("tiles", static_cast<size_t>(TILE_SHEET_COUNT) * TILE_SHEET_W * TILE_SHEET_H);
 #ifndef PLATFORM_NATIVE
     log_bytes("internal arena", arena_internal_capacity());
     log_bytes("internal bands", arena_bands().size);

@@ -51,6 +51,7 @@ add_executable(especter_pc
     actions_ds4.c
     "${ROOT}/game/arena.c"
     "${ROOT}/game/body_sheet.c"
+    "${ROOT}/game/tile_sheet.c"
     "${ROOT}/game/palette.c"
     "${ROOT}/game/map.c"
     "${ROOT}/game/world.c"

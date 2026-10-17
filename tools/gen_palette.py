@@ -45,6 +45,12 @@ def rgb565(r, g, b):
     return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
 
 
+PIN_TILE_MID = rgb565(237, 118, 20)
+PIN_TILE_DEEP = rgb565(198, 69, 36)
+PIN_TILE_EDGE = rgb565(26, 25, 50)
+PIN_TILE_INK = rgb565(14, 7, 27)
+
+
 def from_rgb565(color):
     r = (color >> 11) & 31
     g = (color >> 5) & 63
@@ -202,6 +208,10 @@ def apply_pins(colors):
         ("glass", 4, rgb565(0, 205, 249)),
         ("leaf", 5, rgb565(153, 230, 95)),
         ("ember", 8, rgb565(255, 162, 20)),
+        ("tile_mid", 8, PIN_TILE_MID),
+        ("tile_deep", 8, PIN_TILE_DEEP),
+        ("tile_edge", 1, PIN_TILE_EDGE),
+        ("tile_ink", 1, PIN_TILE_INK),
     )
     for name, row, target in nearest:
         index = nearest_step(colors, row, target, taken)
@@ -267,6 +277,10 @@ def emit_h(pins):
         f"#define PALETTE_BODY_GLASS {pins['glass']}",
         f"#define PALETTE_BODY_EMBER {pins['ember']}",
         f"#define PALETTE_BODY_KILN {pins['kiln']}",
+        f"#define PALETTE_TILE_MID {pins['tile_mid']}",
+        f"#define PALETTE_TILE_DEEP {pins['tile_deep']}",
+        f"#define PALETTE_TILE_EDGE {pins['tile_edge']}",
+        f"#define PALETTE_TILE_INK {pins['tile_ink']}",
         "",
         "extern const uint16_t palette_rgb565[PALETTE_COUNT];",
         "",

@@ -497,6 +497,64 @@ void st7789_drawer::clearBuffer()
 {
 }
 
+/* [st7789_drawer::blit_indices] Copia índices 8bpp para a View. Índice 0 não pinta. Row limpa não muda. */
+void st7789_drawer::blit_indices(int dst_x, int dst_y, int src_x, int src_y, int w, int h, int stride,
+                                 const uint8_t *src)
+{
+    int row;
+    int col;
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+    int sx0;
+    int sy0;
+
+    if (pixels == nullptr || src == nullptr || w <= 0 || h <= 0 || stride <= 0) {
+        return;
+    }
+    x0 = dst_x;
+    y0 = dst_y;
+    x1 = dst_x + w;
+    y1 = dst_y + h;
+    sx0 = src_x;
+    sy0 = src_y;
+    if (x0 < 0) {
+        sx0 -= x0;
+        x0 = 0;
+    }
+    if (y0 < 0) {
+        sy0 -= y0;
+        y0 = 0;
+    }
+    if (x1 > logicalWidth) {
+        x1 = logicalWidth;
+    }
+    if (y1 > logicalHeight) {
+        y1 = logicalHeight;
+    }
+    if (x1 <= x0 || y1 <= y0) {
+        return;
+    }
+    for (row = y0; row < y1; row++) {
+        const uint8_t *src_row;
+        uint8_t *dst;
+
+        if (!row_kept(row)) {
+            continue;
+        }
+        src_row = src + (sy0 + (row - y0)) * stride + sx0;
+        dst = pixels + static_cast<size_t>(row * logicalWidth + x0);
+        for (col = 0; col < x1 - x0; col++) {
+            uint8_t index = src_row[col];
+
+            if (index != 0) {
+                dst[col] = index;
+            }
+        }
+    }
+}
+
 /* [st7789_drawer::drawPixel] Grava um índice da palette no pixel se a row está na máscara. */
 void st7789_drawer::drawPixel(int x, int y, uint16_t color)
 {
