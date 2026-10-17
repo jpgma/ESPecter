@@ -33,7 +33,15 @@
 #define WORLD_SPAN (WORLD_VIEW << WORLD_SUB)
 #define APRON_N 9
 #define PIT_Y 256
-#define WORLD_TAIL 14
+#define WORLD_TAIL 17
+#define DISK_R 32
+#define DISK_CX ((96 * MAP_TILE) + (MAP_TILE / 2))
+#define DISK_CY (MAP_FLOOR_Y + 16)
+#define DISK_PHASES 256
+#define DISK_ARC 201
+#define DISK_CX_SUB (DISK_CX << WORLD_SUB)
+#define DISK_CY_SUB (DISK_CY << WORLD_SUB)
+#define DISK_R_SUB (DISK_R << WORLD_SUB)
 #define SHUTTLE_W 32
 #define SHUTTLE_H 16
 #define SHUTTLE_X0 (464 << WORLD_SUB)
@@ -84,6 +92,9 @@ static int *cp_y;
 static int *shuttle_x;
 static int *shuttle_dir;
 static int *shuttle_rider;
+static int *disk_phase;
+static int *disk_rider;
+static int *disk_dx;
 static int *apron_tx;
 static int *apron_ty;
 static uint8_t *apron;
@@ -1100,7 +1111,7 @@ static int cam_feet(void)
     return compose_sub(row_cell_y[0], row_y[0]) + (row_h[0] << WORLD_SUB);
 }
 
-/* [cam_note_ground] Grava a linha dos pés quando [body_solve_y] marca o chão. */
+/* [cam_note_ground] Grava a linha dos pés quando [body_solve_y] ou [disk_solve] marca o chão. */
 static void cam_note_ground(void)
 {
     if (row_hit_floor[0]) {
@@ -1108,7 +1119,153 @@ static void cam_note_ground(void)
     }
 }
 
-/* [body_solve_y] Soma vy, projeta nas faces, inclusive a rampa e o shuttle, separa a célula e solta o latch no chão ou na saída do muro. move_down ignora o topo one-way e não a rampa. O chão do shuttle grava o rider. O chão chama [cam_note_ground]. */
+/* [disk_clamp] Prende v em [lo, hi]. */
+static int disk_clamp(int v, int lo, int hi)
+{
+    if (v < lo) {
+        return lo;
+    }
+    if (v > hi) {
+        return hi;
+    }
+    return v;
+}
+
+/* [disk_out] Empurra o corpo até o ponto mais próximo sentar no raio. Devolve 1 se houve contato. px e py ficam nesse ponto. */
+static int disk_out(int *x, int *y, int bw, int bh, int *px, int *py)
+{
+    int iter;
+    int hit;
+    int r2;
+
+    hit = 0;
+    *px = 0;
+    *py = 0;
+    r2 = DISK_R_SUB * DISK_R_SUB;
+    for (iter = 0; iter < 4; iter++) {
+        int left;
+        int top;
+        int right;
+        int bottom;
+        int qx;
+        int qy;
+        int dx;
+        int dy;
+        int dist2;
+        int dist;
+        int pen;
+
+        left = *x;
+        top = *y;
+        right = *x + bw;
+        bottom = *y + bh;
+        if (DISK_CX_SUB + DISK_R_SUB <= left || DISK_CX_SUB - DISK_R_SUB >= right || DISK_CY_SUB + DISK_R_SUB <= top
+            || DISK_CY_SUB - DISK_R_SUB >= bottom) {
+            return hit;
+        }
+        qx = disk_clamp(DISK_CX_SUB, left, right);
+        qy = disk_clamp(DISK_CY_SUB, top, bottom);
+        dx = qx - DISK_CX_SUB;
+        dy = qy - DISK_CY_SUB;
+        *px = qx;
+        *py = qy;
+        if (dx == 0 && dy == 0) {
+            int dl;
+            int dr;
+            int dt;
+            int db;
+
+            dl = DISK_CX_SUB - left;
+            dr = right - DISK_CX_SUB;
+            dt = DISK_CY_SUB - top;
+            db = bottom - DISK_CY_SUB;
+            hit = 1;
+            if (db <= dl && db <= dr && db <= dt) {
+                *y -= db + 1;
+            } else if (dt <= dl && dt <= dr) {
+                *y += dt + 1;
+            } else if (dl <= dr) {
+                *x += dl + 1;
+            } else {
+                *x -= dr + 1;
+            }
+            continue;
+        }
+        dist2 = dx * dx + dy * dy;
+        if (dist2 >= r2) {
+            return hit;
+        }
+        dist = isqrt(dist2);
+        if (dist < 1) {
+            dist = 1;
+        }
+        pen = DISK_R_SUB - dist;
+        *x += (dx * pen) / dist;
+        *y += (dy * pen) / dist;
+        if ((dx * pen) % dist != 0) {
+            *x += dx > 0 ? 1 : -1;
+        }
+        if ((dy * pen) % dist != 0) {
+            *y += dy > 0 ? 1 : -1;
+        }
+        hit = 1;
+    }
+    return hit;
+}
+
+/* [disk_solve] Depois das faces, empurra o corpo no raio. Centro abaixo dos pés é chão e grava o rider. Centro ao lado é muro. Centro acima da cabeça é teto. */
+static void disk_solve(const actions *input)
+{
+    int x;
+    int y;
+    int bw;
+    int bh;
+    int px;
+    int py;
+
+    if (disk_rider == 0) {
+        return;
+    }
+    *disk_rider = 0;
+    *disk_dx = 0;
+    x = compose_sub(row_cell_x[0], row_x[0]);
+    y = compose_sub(row_cell_y[0], row_y[0]);
+    bw = row_w[0] << WORLD_SUB;
+    bh = row_h[0] << WORLD_SUB;
+    if (!disk_out(&x, &y, bw, bh, &px, &py)) {
+        return;
+    }
+    split_sub(x, &row_cell_x[0], &row_x[0]);
+    split_sub(y, &row_cell_y[0], &row_y[0]);
+    if (DISK_CY_SUB >= y + bh) {
+        row_vy[0] = 0;
+        row_hit_floor[0] = 1;
+        row_wall[0] = 0;
+        *disk_rider = 1;
+        *disk_dx = -DISK_ARC * (DISK_CY_SUB - py) / DISK_R_SUB;
+        cam_note_ground();
+        return;
+    }
+    if (DISK_CY_SUB < y) {
+        row_vy[0] = 0;
+        row_hit_ceil[0] = 1;
+        return;
+    }
+    row_vx[0] = 0;
+    if (DISK_CX_SUB >= x + bw) {
+        row_hit_right[0] = 1;
+        if (!input->move_down) {
+            row_wall[0] = 1;
+        }
+        return;
+    }
+    row_hit_left[0] = 1;
+    if (!input->move_down) {
+        row_wall[0] = -1;
+    }
+}
+
+/* [body_solve_y] Soma vy, projeta nas faces, inclusive a rampa e o shuttle, separa a célula e solta o latch no chão ou na saída do muro. move_down ignora o topo one-way e não a rampa. O chão do shuttle grava o rider. Depois [disk_solve] empurra o disco. O chão chama [cam_note_ground]. */
 static void body_solve_y(const actions *input)
 {
     int x0;
@@ -1149,9 +1306,10 @@ static void body_solve_y(const actions *input)
             *shuttle_rider = 1;
         }
     }
+    disk_solve(input);
 }
 
-/* [body_jump] Impulsiona no chão, ou na diagonal se o latch de [body_solve_x] vale, limpa o rider e grava o ato do tick. */
+/* [body_jump] Impulsiona no chão, ou na diagonal se o latch de [body_solve_x] vale, limpa os riders e grava o ato do tick. */
 static void body_jump(const actions *input)
 {
     int edge;
@@ -1162,6 +1320,7 @@ static void body_jump(const actions *input)
         row_vy[0] = WORLD_JUMP_VY;
         row_hit_floor[0] = 0;
         *shuttle_rider = 0;
+        *disk_rider = 0;
         row_act[0] = BODY_ACT_FLOOR;
     } else if (edge && body_latched()) {
         if (row_wall[0] < 0) {
@@ -1172,6 +1331,7 @@ static void body_jump(const actions *input)
         row_vy[0] = -WORLD_WALL_JUMP;
         row_wall[0] = 0;
         *shuttle_rider = 0;
+        *disk_rider = 0;
         row_act[0] = BODY_ACT_WALL;
     }
     row_jump_was[0] = input->jump ? 1 : 0;
@@ -1496,7 +1656,7 @@ static void apron_sync(void)
     apron_load(tx, ty);
 }
 
-/* [body_place_at] Põe o corpo no local em subpixels, zerado, com a pose idle virada à direita, limpa o rider, encosta a câmera e chama [apron_sync]. */
+/* [body_place_at] Põe o corpo no local em subpixels, zerado, com a pose idle virada à direita, limpa os riders, encosta a câmera e chama [apron_sync]. */
 static void body_place_at(int cell_x, int x, int cell_y, int y)
 {
     row_cell_x[0] = cell_x;
@@ -1513,13 +1673,14 @@ static void body_place_at(int cell_x, int x, int cell_y, int y)
     row_hit_ceil[0] = 0;
     row_jump_was[0] = 0;
     row_wall[0] = 0;
-    *shuttle_rider = 0;
     row_face[0] = 1;
     row_clip[0] = BODY_CLIP_IDLE;
     row_frame[0] = 0;
     row_hold[0] = 0;
     row_act[0] = BODY_ACT_NONE;
     row_vx_was[0] = 0;
+    *shuttle_rider = 0;
+    *disk_rider = 0;
     *cam_ground = cam_feet();
     *cam_x = cam_focus_x();
     *cam_y = cam_focus_y();
@@ -1567,6 +1728,12 @@ static void shuttle_snap(void)
     *shuttle_dir = 1;
 }
 
+/* [disk_snap] Põe a fase do disco em 0. */
+static void disk_snap(void)
+{
+    *disk_phase = 0;
+}
+
 /* [mark_checkpoint] Grava o pé no chão sob o tile de [MAP_CP_TX]. */
 static void mark_checkpoint(void)
 {
@@ -1579,7 +1746,7 @@ static void mark_checkpoint(void)
     *cp_y = (MAP_FLOOR_Y - WORLD_BODY_H) << WORLD_SUB;
 }
 
-/* [world_init] Monta o corpo no spawn, o apron de [map_at] na slice de [arena_level], o checkpoint no spawn, o shuttle em x 464 e a câmera com a mola parada. Devolve 0 se [arena_ready] servir. */
+/* [world_init] Monta o corpo no spawn, o apron de [map_at] na slice de [arena_level], o checkpoint no spawn, o shuttle em x 464, o disco na fase 0 e a câmera com a mola parada. Devolve 0 se [arena_ready] servir. */
 int world_init(void)
 {
     arena_slice slice;
@@ -1629,6 +1796,9 @@ int world_init(void)
     shuttle_x = cp_y + 1;
     shuttle_dir = shuttle_x + 1;
     shuttle_rider = shuttle_dir + 1;
+    disk_phase = shuttle_rider + 1;
+    disk_rider = disk_phase + 1;
+    disk_dx = disk_rider + 1;
     *life = LIFE_PLAY;
     *dead_hold = 0;
     row_count = 1;
@@ -1637,11 +1807,12 @@ int world_init(void)
     }
     mark_spawn();
     shuttle_snap();
+    disk_snap();
     body_place();
     return 0;
 }
 
-/* [world_reset] Devolve o checkpoint ao spawn, recarrega o apron, encosta o shuttle em x 464 e põe o corpo lá. */
+/* [world_reset] Devolve o checkpoint ao spawn, recarrega o apron, encosta o shuttle em x 464, põe o disco na fase 0 e põe o corpo lá. */
 void world_reset(void)
 {
     if (row_count < 1) {
@@ -1651,6 +1822,7 @@ void world_reset(void)
     *life = LIFE_PLAY;
     *dead_hold = 0;
     shuttle_snap();
+    disk_snap();
     body_place();
 }
 
@@ -1740,6 +1912,30 @@ static int shuttle_step(void)
     return x - prev;
 }
 
+/* [disk_step] Avança uma fase das 256. A volta recomeça em 0. */
+static void disk_step(void)
+{
+    if (disk_phase == 0) {
+        return;
+    }
+    *disk_phase += 1;
+    if (*disk_phase >= DISK_PHASES) {
+        *disk_phase = 0;
+    }
+}
+
+/* [disk_carry] Soma o dx tangente se o rider do tick anterior vale. */
+static void disk_carry(void)
+{
+    int x;
+
+    if (disk_rider == 0 || !*disk_rider || disk_dx == 0 || *disk_dx == 0) {
+        return;
+    }
+    x = compose_sub(row_cell_x[0], row_x[0]) + *disk_dx;
+    split_sub(x, &row_cell_x[0], &row_x[0]);
+}
+
 /* [body_carry] Soma dx ao corpo se o rider do tick anterior vale. */
 static void body_carry(int dx)
 {
@@ -1752,7 +1948,7 @@ static void body_carry(int dx)
     split_sub(x, &row_cell_x[0], &row_x[0]);
 }
 
-/* [world_tick] Integra um tick fixo. [shuttle_step] corre sempre. O rider soma esse dx antes das solves. move_down solta o latch e atravessa o one-way. A rampa levanta os pés e a face alta trava. O pit e o spike abrem 252 ms de morte e depois [body_place_at] no checkpoint. A saída congela o corpo até [world_reset]. A mola e [body_pose] só correm vivo. */
+/* [world_tick] Integra um tick fixo. [shuttle_step] e [disk_step] correm sempre. Os riders somam o dx antes das solves. move_down solta o latch e atravessa o one-way. A rampa levanta os pés e a face alta trava. O disco empurra no raio. O pit e o spike abrem 252 ms de morte e depois [body_place_at] no checkpoint. A saída congela o corpo até [world_reset]. A mola e [body_pose] só correm vivo. */
 void world_tick(const actions *input)
 {
     int dx;
@@ -1761,6 +1957,7 @@ void world_tick(const actions *input)
         return;
     }
     dx = shuttle_step();
+    disk_step();
     if (*life == LIFE_DONE) {
         return;
     }
@@ -1781,6 +1978,7 @@ void world_tick(const actions *input)
     body_gravity(input);
     body_slide();
     body_carry(dx);
+    disk_carry();
     body_solve_x(input);
     body_solve_y(input);
     if (body_fallen() || apron_hits(MAP_SPIKE)) {
@@ -2073,4 +2271,105 @@ void world_shuttle_rect(int *x, int *y, int *w, int *h)
     *y = MAP_FLOOR_Y;
     *w = SHUTTLE_W;
     *h = SHUTTLE_H;
+}
+
+static const int disk_sin[65] = {
+    0,   6,   13,  19,  25,  31,  38,  44,  50,  56,  62,  68,  74,  80,  86,  92,  98,
+    104, 109, 115, 121, 126, 132, 137, 142, 147, 152, 157, 162, 167, 172, 177, 181, 185,
+    190, 194, 198, 202, 206, 209, 213, 216, 220, 223, 226, 229, 231, 234, 237, 239, 241,
+    243, 245, 247, 248, 250, 251, 252, 253, 254, 255, 255, 256, 256, 256,
+};
+
+/* [disk_tip] Escreve a ponta do raio em pixels. Fase 0 aponta para cima e gira para a esquerda. */
+static void disk_tip(int phase, int *tx, int *ty)
+{
+    int quad;
+    int ang;
+    int s;
+    int c;
+    int dx;
+    int dy;
+
+    if (phase < 0) {
+        phase = 0;
+    }
+    phase &= DISK_PHASES - 1;
+    quad = phase >> 6;
+    ang = phase & 63;
+    s = disk_sin[ang];
+    c = disk_sin[64 - ang];
+    if (quad == 0) {
+        dx = -s;
+        dy = -c;
+    } else if (quad == 1) {
+        dx = -c;
+        dy = s;
+    } else if (quad == 2) {
+        dx = s;
+        dy = c;
+    } else {
+        dx = c;
+        dy = -s;
+    }
+    *tx = DISK_CX + dx * DISK_R / 256;
+    *ty = DISK_CY + dy * DISK_R / 256;
+}
+
+/* [world_disk_phase] Devolve a fase do disco. Sem mundo, devolve 0. */
+int world_disk_phase(void)
+{
+    if (disk_phase == 0) {
+        return 0;
+    }
+    return *disk_phase;
+}
+
+/* [world_disk_cap] Escreve o retângulo do tampão acima do chão. */
+void world_disk_cap(int *x, int *y, int *w, int *h)
+{
+    *x = DISK_CX - DISK_R;
+    *y = DISK_CY - DISK_R;
+    *w = DISK_R * 2;
+    *h = MAP_FLOOR_Y - (DISK_CY - DISK_R);
+}
+
+/* [world_disk_row] Escreve o x e a largura da fileira preta do tampão. Devolve 0 fora do tampão. */
+int world_disk_row(int y, int *x, int *w)
+{
+    int dist;
+    int half;
+
+    if (y < DISK_CY - DISK_R || y >= MAP_FLOOR_Y) {
+        return 0;
+    }
+    dist = DISK_CY - (y + 1);
+    if (dist < 0 || dist >= DISK_R) {
+        return 0;
+    }
+    half = isqrt(DISK_R * DISK_R - dist * dist);
+    if (half <= 0) {
+        *x = DISK_CX;
+        *w = 1;
+        return 1;
+    }
+    *x = DISK_CX - half;
+    *w = half * 2;
+    return 1;
+}
+
+/* [world_disk_spoke] Escreve o x do raio branco nesta fileira do tampão. Devolve 0 se o raio não cruza. */
+int world_disk_spoke(int phase, int y, int *x)
+{
+    int tx;
+    int ty;
+
+    if (y < DISK_CY - DISK_R || y >= MAP_FLOOR_Y) {
+        return 0;
+    }
+    disk_tip(phase, &tx, &ty);
+    if (ty >= MAP_FLOOR_Y || y < ty || ty == DISK_CY) {
+        return 0;
+    }
+    *x = DISK_CX + (y - DISK_CY) * (tx - DISK_CX) / (ty - DISK_CY);
+    return 1;
 }

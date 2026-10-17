@@ -5,7 +5,8 @@
    Célula 1: fosso de 3 tiles, depois o chão, um spike e um checkpoint.
    Célula 2: vão do shuttle. Célula 3: onda de rampas na fileira 13, sobre o chão.
    Da coluna 62, fileira 13, uma 45° sobe um tile por coluna até a fileira 1.
-   Da coluna 75, fileira 1, uma 45° desce até a fileira 13. A saída fica na coluna 89.
+   Da coluna 75, fileira 1, uma 45° desce até a fileira 13.
+   O disco sobe na coluna 96. A saída fica na coluna 104.
    Células 4 a 7: chão. O resto da faixa é vazio. */
 
 static const uint8_t strip[MAP_H * MAP_W] = {
@@ -79,7 +80,7 @@ static const uint8_t strip[MAP_H * MAP_W] = {
     [11 * MAP_W + 85] = MAP_SLOPE_L45,
     [12 * MAP_W + 86] = MAP_SLOPE_L45,
     [13 * MAP_W + 87] = MAP_SLOPE_L45,
-    [13 * MAP_W + 89] = MAP_EXIT,
+    [13 * MAP_W + 104] = MAP_EXIT,
     [13 * MAP_W + 45] = MAP_SLOPE_R45,
     [13 * MAP_W + 46] = MAP_SLOPE_L45,
     [13 * MAP_W + 47] = MAP_SLOPE_R2_0,

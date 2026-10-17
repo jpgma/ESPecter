@@ -13,11 +13,11 @@ extern "C" {
 #define WORLD_BODY_H 12
 #define WORLD_SOLID_CAP 256
 
-/* [world_init] Monta o corpo no spawn, o apron de [map_at] na slice de [arena_level], o checkpoint no spawn, o shuttle em x 464 e a câmera com a mola parada. Devolve 0 se [arena_ready] servir. */
+/* [world_init] Monta o corpo no spawn, o apron de [map_at] na slice de [arena_level], o checkpoint no spawn, o shuttle em x 464, o disco na fase 0 e a câmera com a mola parada. Devolve 0 se [arena_ready] servir. */
 int world_init(void);
-/* [world_reset] Devolve o checkpoint ao spawn, recarrega o apron, encosta o shuttle em x 464 e põe o corpo lá. */
+/* [world_reset] Devolve o checkpoint ao spawn, recarrega o apron, encosta o shuttle em x 464, põe o disco na fase 0 e põe o corpo lá. */
 void world_reset(void);
-/* [world_tick] Integra um tick fixo. O shuttle anda sempre. O rider soma esse dx antes das solves. move_down solta o latch e atravessa o one-way. A rampa levanta os pés e a face alta trava. O pit e o spike abrem 252 ms de morte e depois [body_place_at] no checkpoint. A saída congela o corpo até [world_reset]. A mola e [body_pose] só correm vivo. */
+/* [world_tick] Integra um tick fixo. [shuttle_step] e [disk_step] correm sempre. Os riders somam o dx antes das solves. move_down solta o latch e atravessa o one-way. A rampa levanta os pés e a face alta trava. O disco empurra no raio. O pit e o spike abrem 252 ms de morte e depois [body_place_at] no checkpoint. A saída congela o corpo até [world_reset]. A mola e [body_pose] só correm vivo. */
 void world_tick(const actions *input);
 /* [world_rect] Escreve a posição no mundo, em pixels, e o tamanho do Rect. */
 void world_rect(int *x, int *y, int *w, int *h);
@@ -41,6 +41,14 @@ void world_checkpoint_rect(int *x, int *y, int *w, int *h);
 void world_exit_rect(int *x, int *y, int *w, int *h);
 /* [world_shuttle_rect] Escreve o shuttle em pixels do mundo. */
 void world_shuttle_rect(int *x, int *y, int *w, int *h);
+/* [world_disk_phase] Devolve a fase do disco. Sem mundo, devolve 0. */
+int world_disk_phase(void);
+/* [world_disk_cap] Escreve o retângulo do tampão acima do chão. */
+void world_disk_cap(int *x, int *y, int *w, int *h);
+/* [world_disk_row] Escreve o x e a largura da fileira preta do tampão. Devolve 0 fora do tampão. */
+int world_disk_row(int y, int *x, int *w);
+/* [world_disk_spoke] Escreve o x do raio branco nesta fileira do tampão. Devolve 0 se o raio não cruza. */
+int world_disk_spoke(int phase, int y, int *x);
 
 #ifdef __cplusplus
 }

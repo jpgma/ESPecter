@@ -136,6 +136,7 @@ struct draw_view {
     view_rect checkpoint;
     view_rect exit_box;
     view_rect shuttle;
+    int disk_phase;
     int debug;
     uint16_t ground;
     int battery_pct;
@@ -225,6 +226,49 @@ int box_hits_view(int cam_x, int cam_y, int x, int y, int w, int h)
         return 0;
     }
     return x < cam_x + WORLD_VIEW && cam_x < x + w && y < cam_y + WORLD_VIEW && cam_y < y + h;
+}
+
+/* [draw_disk] Pinta o tampão em fileiras pretas e o raio branco da fase. O miolo sob o chão não entra. */
+void draw_disk(pixelroot32::graphics::Renderer &renderer, int cam_x, int cam_y, int phase)
+{
+    int cap_x;
+    int cap_y;
+    int cap_w;
+    int cap_h;
+    int row;
+    int x;
+    int w;
+    int sx;
+    int sy;
+    int sw;
+    int sh;
+    int spoke;
+
+    world_disk_cap(&cap_x, &cap_y, &cap_w, &cap_h);
+    (void)cap_x;
+    (void)cap_w;
+    for (row = 0; row < cap_h; row++) {
+        if (!world_disk_row(cap_y + row, &x, &w)) {
+            continue;
+        }
+        sx = x;
+        sy = cap_y + row;
+        sw = w;
+        sh = 1;
+        if (clip_view(cam_x, cam_y, &sx, &sy, &sw, &sh)) {
+            renderer.drawFilledRectangle(sx, sy, sw, sh, pixelroot32::graphics::Color::Black);
+        }
+        if (!world_disk_spoke(phase, cap_y + row, &spoke)) {
+            continue;
+        }
+        sx = spoke;
+        sy = cap_y + row;
+        sw = 1;
+        sh = 1;
+        if (clip_view(cam_x, cam_y, &sx, &sy, &sw, &sh)) {
+            renderer.drawFilledRectangle(sx, sy, sw, sh, pixelroot32::graphics::Color::White);
+        }
+    }
 }
 
 /* [draw_slope] Pinta as fileiras sólidas da rampa em preto. O retângulo publicado continua o tile inteiro. */
@@ -441,6 +485,7 @@ void publish_view(void)
     world_exit_rect(&g_slot->view.exit_box.x, &g_slot->view.exit_box.y, &g_slot->view.exit_box.w, &g_slot->view.exit_box.h);
     world_shuttle_rect(&g_slot->view.shuttle.x, &g_slot->view.shuttle.y, &g_slot->view.shuttle.w,
                        &g_slot->view.shuttle.h);
+    g_slot->view.disk_phase = world_disk_phase();
     g_slot->view.debug = g_debug;
 #ifndef PLATFORM_NATIVE
     g_slot->view.ground = link_ground();
@@ -535,6 +580,7 @@ view_rect g_last_spike;
 view_rect g_last_checkpoint;
 view_rect g_last_exit;
 view_rect g_last_shuttle;
+int g_last_disk_phase;
 
 /* [rect_same] Devolve 1 se os dois Rect coincidem. */
 int rect_same(const view_rect *a, const view_rect *b)
@@ -568,7 +614,19 @@ int body_changed(void)
         || g_shown->face != g_last_face;
 }
 
-/* [mark_movers] Marca sólidos, spike, checkpoint, saída, shuttle e corpo no cam_y. */
+/* [mark_disk_rows] Marca o Y de tela do tampão. */
+void mark_disk_rows(int cam_y)
+{
+    int x;
+    int y;
+    int w;
+    int h;
+
+    world_disk_cap(&x, &y, &w, &h);
+    mark_rect_rows(cam_y, y, h);
+}
+
+/* [mark_movers] Marca sólidos, spike, checkpoint, saída, shuttle, tampão e corpo no cam_y. */
 void mark_movers(int cam_y)
 {
     int i;
@@ -580,6 +638,7 @@ void mark_movers(int cam_y)
     mark_rect_rows(cam_y, g_shown->checkpoint.y, g_shown->checkpoint.h);
     mark_rect_rows(cam_y, g_shown->exit_box.y, g_shown->exit_box.h);
     mark_rect_rows(cam_y, g_shown->shuttle.y, g_shown->shuttle.h);
+    mark_disk_rows(cam_y);
     mark_body_rows(cam_y, g_shown->body_y, g_shown->body_h);
 }
 
@@ -644,6 +703,9 @@ int mark_present_rows(void)
             mark_rect_rows(g_shown->cam_y, g_last_shuttle.y, g_last_shuttle.h);
             mark_rect_rows(g_shown->cam_y, g_shown->shuttle.y, g_shown->shuttle.h);
         }
+        if (g_shown->disk_phase != g_last_disk_phase) {
+            mark_disk_rows(g_shown->cam_y);
+        }
     }
     if (g_shown->debug && (g_fps != g_last_fps || g_shown->battery_pct != g_last_battery)) {
         especter::st7789_rows_mark(0, k_text_rows);
@@ -671,6 +733,7 @@ void remember_present(void)
     g_last_checkpoint = g_shown->checkpoint;
     g_last_exit = g_shown->exit_box;
     g_last_shuttle = g_shown->shuttle;
+    g_last_disk_phase = g_shown->disk_phase;
     g_have_last = 1;
 }
 #endif
@@ -690,7 +753,7 @@ public:
 #endif
     }
 
-    /* [rect_scene::draw] Pinta a view de [load_view]: ground, sólidos, shuttle, spike, checkpoint, saída e corpo no offset da câmera. No device só as rows de [mark_present_rows]. Com o debug, o wireframe das células, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No PC, com o PWR apagado, pinta preto e volta. */
+    /* [rect_scene::draw] Pinta a view de [load_view]: ground, sólidos, shuttle, tampão, spike, checkpoint, saída e corpo no offset da câmera. No device só as rows de [mark_present_rows]. Com o debug, o wireframe das células, a carga no canto superior esquerdo no device e o FPS no canto superior direito. No PC, com o PWR apagado, pinta preto e volta. */
     void draw(pixelroot32::graphics::Renderer &renderer) override
     {
         int cam_x;
@@ -774,6 +837,7 @@ public:
         if (clip_view(cam_x, cam_y, &mx, &my, &mw, &mh)) {
             renderer.drawFilledRectangle(mx, my, mw, mh, pixelroot32::graphics::Color::Black);
         }
+        draw_disk(renderer, cam_x, cam_y, g_shown->disk_phase);
         mx = g_shown->spike.x;
         my = g_shown->spike.y;
         mw = g_shown->spike.w;
